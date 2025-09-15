@@ -88,30 +88,44 @@ except Exception:
 
 
 def build_timeseries(df: pd.DataFrame) -> TimeSeries | None:
-    """根据DataFrame构造TimeSeries，自动尝试不同频率"""
+    """根据DataFrame构造TimeSeries，与训练时保持一致"""
     try:
-        return TimeSeries.from_dataframe(df, time_col="time", value_cols=["temperature", "humidity", "wind_dir", "wind_speed"], fill_missing_dates=False)
-    except Exception:
-        for freq in ["H", "T"]:
-            try:
-                return TimeSeries.from_dataframe(df, time_col="time", value_cols=["temperature", "humidity", "wind_dir", "wind_speed"], fill_missing_dates=True, freq=freq)
-            except Exception:
-                continue
-    return None
+        # 与训练时保持一致：使用5分钟频率，3个特征
+        return TimeSeries.from_dataframe(
+            df, 
+            time_col="time", 
+            value_cols=["temperature", "humidity", "wind_speed"], 
+            fill_missing_dates=True, 
+            freq="5min"
+        )
+    except Exception as e:
+        logger.error(f"构建时间序列失败: {e}")
+        return None
 
 
 def make_prediction(series: TimeSeries, horizon: int = 6) -> pd.DataFrame:
     """对时间序列做预测并返回DataFrame"""
-    # 缩放
-    s = scaler.transform(series) if scaler else series
-    forecast = model.predict(n=horizon, series=s)
-    forecast = scaler.inverse_transform(forecast) if scaler else forecast
+    try:
+        # 确保数据长度足够
+        if len(series) < 24:
+            logger.warning(f"数据长度不足，需要至少24个点，当前只有{len(series)}个")
+            return pd.DataFrame()
+        
+        # 缩放
+        s = scaler.transform(series) if scaler else series
+        forecast = model.predict(n=horizon, series=s)
+        forecast = scaler.inverse_transform(forecast) if scaler else forecast
 
-    df = forecast.to_dataframe().reset_index()
-    df = df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
-    if 'time' in df.columns:
-        df['time'] = df['time'].astype(str)
-    return df
+        df = forecast.to_dataframe().reset_index()
+        df = df.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+        if 'time' in df.columns:
+            df['time'] = df['time'].astype(str)
+        
+        logger.info(f"预测完成，生成了{len(df)}个预测点")
+        return df
+    except Exception as e:
+        logger.error(f"预测失败: {e}")
+        return pd.DataFrame()
 
 # ----------------------------
 # 请求体定义
@@ -121,7 +135,6 @@ class WeatherData(BaseModel):
     record_time: datetime
     temperature: float
     humidity: int
-    wind_dir: int
     wind_speed: float
 
 # ----------------------------
@@ -134,18 +147,18 @@ async def ingest(data_point: WeatherData):
 
     # 初始化站点缓存
     if data_point.station not in series_cache:
-        series_cache[data_point.station] = pd.DataFrame(columns=["time", "temperature", "humidity", "wind_dir", "wind_speed"])
+        series_cache[data_point.station] = pd.DataFrame(columns=["time", "temperature", "humidity", "wind_speed"])
 
     df = series_cache[data_point.station]
     ts = pd.to_datetime(data_point.record_time).tz_localize(None)
 
     # 更新或新增数据
     if ts in df['time'].values:
-        df.loc[df['time'] == ts, ["temperature", "humidity", "wind_dir", "wind_speed"]] = [
-            data_point.temperature, data_point.humidity, data_point.wind_dir, data_point.wind_speed
+        df.loc[df['time'] == ts, ["temperature", "humidity", "wind_speed"]] = [
+            data_point.temperature, data_point.humidity, data_point.wind_speed
         ]
     else:
-        df = pd.concat([df, pd.DataFrame({"time":[ts], "temperature":[data_point.temperature], "humidity":[data_point.humidity], "wind_dir":[data_point.wind_dir], "wind_speed":[data_point.wind_speed]})], ignore_index=True)
+        df = pd.concat([df, pd.DataFrame({"time":[ts], "temperature":[data_point.temperature], "humidity":[data_point.humidity], "wind_speed":[data_point.wind_speed]})], ignore_index=True)
 
     df = df.sort_values("time")
     series_cache[data_point.station] = df
@@ -178,6 +191,21 @@ def root():
 @app.get("/api")
 def api_root():
     return {"message": "微气候预测服务运行中"}
+
+@app.get("/api/status")
+def get_status():
+    """获取模型和服务状态"""
+    return {
+        "model_loaded": model is not None,
+        "scaler_loaded": scaler is not None,
+        "training_info_loaded": training_info is not None,
+        "features": training_info.get("features", []) if training_info else [],
+        "input_chunk_length": training_info.get("input_chunk_length", 24) if training_info else 24,
+        "output_chunk_length": training_info.get("output_chunk_length", 6) if training_info else 6,
+        "freq": training_info.get("freq", "5min") if training_info else "5min",
+        "active_stations": len(series_cache),
+        "stations": list(series_cache.keys())
+    }
 
 
 @app.websocket("/ws")
