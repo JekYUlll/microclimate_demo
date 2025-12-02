@@ -2,13 +2,14 @@
 
 import warnings
 import os
-warnings.filterwarnings('ignore')
-os.environ['TQDM_DISABLE'] = '1'
+
+warnings.filterwarnings("ignore")
+os.environ["TQDM_DISABLE"] = "1"
 
 # 设置NCCL环境变量，优化多GPU通信
-os.environ['NCCL_TIMEOUT'] = '1800'  # 30分钟超时
-os.environ['NCCL_IB_TIMEOUT'] = '22'  # InfiniBand超时
-os.environ['NCCL_DEBUG'] = 'INFO'  # 调试信息（可选）
+os.environ["NCCL_TIMEOUT"] = "1800"  # 30分钟超时
+os.environ["NCCL_IB_TIMEOUT"] = "22"  # InfiniBand超时
+os.environ["NCCL_DEBUG"] = "INFO"  # 调试信息（可选）
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -55,8 +56,8 @@ print(f"时间范围: {df['record_time'].min()} 到 {df['record_time'].max()}")
 # 2. 数据预处理
 # ============================================
 print("\n=== 数据预处理 ===")
-df['record_time'] = pd.to_datetime(df['record_time']).dt.tz_localize(None)
-df = df.sort_values('record_time').reset_index(drop=True)
+df["record_time"] = pd.to_datetime(df["record_time"]).dt.tz_localize(None)
+df = df.sort_values("record_time").reset_index(drop=True)
 
 # 数值转换
 df[FEATURES] = df[FEATURES].apply(pd.to_numeric, errors="coerce")
@@ -75,7 +76,7 @@ series = TimeSeries.from_dataframe(
     time_col="record_time",
     value_cols=FEATURES,
     fill_missing_dates=True,
-    freq="5min"
+    freq="5min",
 )
 series = series.astype(np.float32)
 
@@ -98,22 +99,22 @@ print(f"验证集时间范围: {val.start_time()} 到 {val.end_time()}")
 # ============================================
 print("\n=== 训练TCN模型（使用6块GPU） ===")
 model = TCNModel(
-    input_chunk_length=24,      # 输入窗口长度
-    output_chunk_length=6,      # 输出窗口长度
-    num_layers=2,                # TCN层数
-    num_filters=64,              # 卷积核数量
-    kernel_size=3,               # 卷积核大小
-    dropout=0.1,                 # Dropout率
-    n_epochs=50,                 # 训练轮数
-    batch_size=128,              # 批次大小（多GPU可以增大batch_size）
+    input_chunk_length=24,  # 输入窗口长度
+    output_chunk_length=6,  # 输出窗口长度
+    num_layers=2,  # TCN层数
+    num_filters=64,  # 卷积核数量
+    kernel_size=3,  # 卷积核大小
+    dropout=0.1,  # Dropout率
+    n_epochs=50,  # 训练轮数
+    batch_size=128,  # 批次大小
     optimizer_kwargs={"lr": 0.001},
     random_state=42,
     force_reset=True,
     pl_trainer_kwargs={
         "accelerator": "gpu",
-        "devices": [0, 1, 2, 3, 4, 5],  # 使用全部6块GPU
-        "precision": 32,                 # 全精度训练
-        "strategy": "ddp",              # 数据并行策略
+        "devices": [0, 1, 2, 3, 4, 5],
+        "precision": 32,  # 全精度训练
+        "strategy": "ddp",  # 数据并行策略
     },
 )
 
@@ -138,7 +139,7 @@ training_info = {
     "freq": "5min",
     "input_chunk_length": 24,
     "output_chunk_length": 6,
-    "features": FEATURES
+    "features": FEATURES,
 }
 with open("tcn_training_info.pkl", "wb") as f:
     pickle.dump(training_info, f)
@@ -153,7 +154,7 @@ print("重新加载模型用于预测...")
 try:
     model_for_prediction = TCNModel.load("tcn_model.pt")
     # 设置单GPU预测配置
-    if hasattr(model_for_prediction, 'trainer_params'):
+    if hasattr(model_for_prediction, "trainer_params"):
         model_for_prediction.trainer_params = {
             **model_for_prediction.trainer_params,
             "accelerator": "gpu",
@@ -165,6 +166,7 @@ try:
 except Exception as e:
     print(f"⚠️ 重新加载模型失败，使用原始模型: {e}")
     import traceback
+
     traceback.print_exc()
     forecast = model.predict(n=len(val), series=train)
 
@@ -184,13 +186,13 @@ for col in FEATURES:
 print("\n=== 生成可视化图表 ===")
 plt.figure(figsize=(15, 8))
 for i, col in enumerate(FEATURES):
-    plt.subplot(len(FEATURES), 1, i+1)
+    plt.subplot(len(FEATURES), 1, i + 1)
     val_series = val.univariate_component(col)
     forecast_series = forecast.univariate_component(col)
-    
-    val_series.plot(label=f"实际值", color='blue', linewidth=2)
-    forecast_series.plot(label=f"预测值", color='red', linewidth=2)
-    
+
+    val_series.plot(label=f"实际值", color="blue", linewidth=2)
+    forecast_series.plot(label=f"预测值", color="red", linewidth=2)
+
     plt.title(f"{col} - 实际值 vs 预测值")
     plt.legend()
     plt.grid(True)
@@ -201,4 +203,3 @@ plt.close()
 print(f"✅ 已保存: plots/{station}_tcn_prediction.png")
 
 print("\n✅ TCN模型训练完成！")
-
