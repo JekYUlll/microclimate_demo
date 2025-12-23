@@ -43,6 +43,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout between LSTM layers.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed.")
     parser.add_argument("--device", type=str, default=None, help="Force cpu/cuda.")
+    parser.add_argument("--log-path", type=Path, default=None, help="Optional log file path.")
+    parser.add_argument("--log-every", type=int, default=1, help="Log every N epochs.")
+    parser.add_argument("--quiet", action="store_true", help="Disable console logging.")
     parser.add_argument(
         "--max-imfs",
         type=int,
@@ -83,6 +86,9 @@ def main() -> None:
         dropout=args.dropout,
         seed=args.seed,
         device=args.device,
+        log_path=args.log_path,
+        log_every=args.log_every,
+        verbose=not args.quiet,
         max_imfs=None if args.max_imfs == 0 else args.max_imfs,
         max_points=None if args.max_points == 0 else args.max_points,
         plot_path=args.plot,

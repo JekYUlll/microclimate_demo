@@ -16,9 +16,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import Settings  # noqa: E402
-from src.data import WindowDataset, feature_matrix  # noqa: E402
-from src.RAW_LSTM.model import LSTMForecaster  # noqa: E402
+from src.RAW_LSTM.config import Settings
+from src.RAW_LSTM.data import WindowDataset, feature_matrix
+from src.RAW_LSTM.model import LSTMForecaster
 
 
 def parse_args() -> argparse.Namespace:

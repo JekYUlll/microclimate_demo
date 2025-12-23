@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import random
+import time
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -35,6 +37,51 @@ class ExperimentConfig:
     max_imfs: Optional[int] = 8
     max_points: Optional[int] = 2000
     plot_path: Optional[Path] = None
+    log_path: Optional[Path] = None
+    log_every: int = 1
+    verbose: bool = True
+    cudnn_benchmark: bool = True
+    matmul_precision: Optional[str] = "high"
+
+
+def _log_message(cfg: ExperimentConfig, message: str) -> None:
+    if cfg.verbose:
+        print(message)
+    if cfg.log_path:
+        cfg.log_path.parent.mkdir(parents=True, exist_ok=True)
+        with cfg.log_path.open("a", encoding="utf-8") as handle:
+            handle.write(message + "\n")
+
+
+def _log_header(cfg: ExperimentConfig) -> None:
+    if not cfg.log_path:
+        return
+    header = [
+        "",
+        "=" * 80,
+        f"EMD-LSTM run started at {datetime.now().isoformat(timespec='seconds')}",
+        f"data_path={cfg.data_path}",
+        f"target_col={cfg.target_col}",
+        f"feature_cols={cfg.feature_cols}",
+        f"input_window={cfg.input_window}",
+        f"horizon={cfg.horizon}",
+        f"train_ratio={cfg.train_ratio}",
+        f"epochs={cfg.epochs}",
+        f"batch_size={cfg.batch_size}",
+        f"learning_rate={cfg.learning_rate}",
+        f"hidden_size={cfg.hidden_size}",
+        f"num_layers={cfg.num_layers}",
+        f"dropout={cfg.dropout}",
+        f"seed={cfg.seed}",
+        f"device={cfg.device}",
+        f"max_imfs={cfg.max_imfs}",
+        f"matmul_precision={cfg.matmul_precision}",
+        f"cudnn_benchmark={cfg.cudnn_benchmark}",
+        "=" * 80,
+    ]
+    cfg.log_path.parent.mkdir(parents=True, exist_ok=True)
+    with cfg.log_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(header) + "\n")
 
 
 class ComponentDataset(Dataset):
@@ -268,8 +315,11 @@ def train_component(
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
 
-    for _ in range(cfg.epochs):
+    for epoch in range(1, cfg.epochs + 1):
         model.train()
+        running_loss = 0.0
+        seen = 0
+        epoch_start = time.time()
         for features, targets in train_loader:
             features_tensor = torch.as_tensor(features).to(device)
             targets_tensor = torch.as_tensor(targets).to(device)
@@ -278,6 +328,13 @@ def train_component(
             loss = criterion(preds, targets_tensor)
             loss.backward()
             optimizer.step()
+            batch_size = features_tensor.size(0)
+            running_loss += loss.item() * batch_size
+            seen += batch_size
+        if cfg.verbose and (epoch % cfg.log_every == 0 or epoch == cfg.epochs):
+            avg_loss = running_loss / max(seen, 1)
+            elapsed = time.time() - epoch_start
+            _log_message(cfg, f"  epoch {epoch:03d} | train_loss={avg_loss:.4f} | {elapsed:.1f}s")
 
     model.eval()
     preds_list: List[torch.Tensor] = []
@@ -313,6 +370,11 @@ def aggregate_metrics(preds: np.ndarray, targets: np.ndarray) -> Tuple[float, fl
 
 def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     set_seed(cfg.seed)
+    if torch.cuda.is_available() and (cfg.device is None or "cuda" in cfg.device):
+        if cfg.matmul_precision:
+            torch.set_float32_matmul_precision(cfg.matmul_precision)
+        torch.backends.cudnn.benchmark = cfg.cudnn_benchmark
+    _log_header(cfg)
 
     target, features, timestamps = prepare_series(cfg)
     signal = target.to_numpy(dtype=np.float32)
@@ -325,7 +387,10 @@ def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.nd
     split_idx = max(split_idx, min_required)
     split_idx = min(split_idx, len(signal) - min_required)
 
+    _log_message(cfg, "Starting EMD decomposition...")
+    emd_start = time.time()
     imfs, residue = decompose_signal(signal)
+    _log_message(cfg, f"EMD decomposition done in {time.time() - emd_start:.1f}s")
     if cfg.max_imfs is not None and imfs.shape[0] > cfg.max_imfs:
         imfs = imfs[: cfg.max_imfs]
     components = [imf for imf in imfs] + [residue]
@@ -333,8 +398,11 @@ def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.nd
     preds_components: List[np.ndarray] = []
     targets_components: List[np.ndarray] = []
 
-    for comp in components:
+    for idx, comp in enumerate(components, start=1):
+        _log_message(cfg, f"Training component {idx}/{len(components)}")
+        comp_start = time.time()
         preds, targets = train_component(features, comp, split_idx, cfg)
+        _log_message(cfg, f"Component {idx} done in {time.time() - comp_start:.1f}s")
         preds_components.append(preds)
         targets_components.append(targets)
 
@@ -342,10 +410,10 @@ def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.nd
     targets_sum = np.sum(targets_components, axis=0)
 
     rmse_all, mae_all, rmse_step1, mae_step1 = aggregate_metrics(preds_sum, targets_sum)
-    print(f"RMSE (all steps): {rmse_all:.4f}")
-    print(f"MAE  (all steps): {mae_all:.4f}")
-    print(f"RMSE (t+1 only): {rmse_step1:.4f}")
-    print(f"MAE  (t+1 only): {mae_step1:.4f}")
+    _log_message(cfg, f"RMSE (all steps): {rmse_all:.4f}")
+    _log_message(cfg, f"MAE  (all steps): {mae_all:.4f}")
+    _log_message(cfg, f"RMSE (t+1 only): {rmse_step1:.4f}")
+    _log_message(cfg, f"MAE  (t+1 only): {mae_step1:.4f}")
 
     start_time_idx = split_idx + cfg.input_window
     indices = start_time_idx + np.arange(len(preds_sum))
