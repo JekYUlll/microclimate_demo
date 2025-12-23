@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import Settings  # noqa: E402
 from src.data import WindowDataset, feature_matrix  # noqa: E402
-from src.model import LSTMForecaster  # noqa: E402
+from src.RAW_LSTM.model import LSTMForecaster  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

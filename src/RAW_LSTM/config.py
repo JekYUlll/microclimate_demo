@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @dataclass
@@ -42,6 +42,7 @@ class DataConfig:
 class TrainingConfig:
     """Hyper-parameters for the LSTM training loop."""
 
+    # 需要微调时主要调整这些参数，也可通过 CLI 传入相同名字的选项覆盖
     input_window: int = 24
     forecast_horizon: int = 6
     batch_size: int = 64

@@ -17,9 +17,9 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from src.config import Settings
-from src.data import WindowDataset, feature_matrix, normalization_stats, select_features
-from src.model import LSTMForecaster
+from src.RAW_LSTM.config import Settings
+from src.RAW_LSTM.data import WindowDataset, feature_matrix, normalization_stats, select_features
+from src.RAW_LSTM.model import LSTMForecaster
 
 
 def parse_args() -> argparse.Namespace:

@@ -8,8 +8,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import Settings
-from src.data import load_all_stations
+from src.RAW_LSTM.config import Settings
+from src.RAW_LSTM.data import load_all_stations
 
 
 def parse_args() -> argparse.Namespace:

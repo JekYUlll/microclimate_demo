@@ -1,0 +1,377 @@
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
+
+import numpy as np
+import pandas as pd
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, Dataset
+
+from ..RAW_LSTM.model import LSTMForecaster
+
+
+@dataclass
+class ExperimentConfig:
+    data_path: Path
+    target_col: str = "Temperature(Ąć)"
+    feature_cols: Optional[List[str]] = None
+    encoding: Optional[str] = None
+    input_window: int = 24
+    horizon: int = 6
+    train_ratio: float = 0.8
+    epochs: int = 15
+    batch_size: int = 128
+    learning_rate: float = 1e-3
+    hidden_size: int = 128
+    num_layers: int = 2
+    dropout: float = 0.1
+    seed: int = 42
+    device: Optional[str] = None
+    max_imfs: Optional[int] = 8
+    max_points: Optional[int] = 2000
+    plot_path: Optional[Path] = None
+
+
+class ComponentDataset(Dataset):
+    def __init__(
+        self,
+        features: np.ndarray,
+        target: np.ndarray,
+        window_size: int,
+        horizon: int,
+        start: int = 0,
+        end: Optional[int] = None,
+    ) -> None:
+        self.features = features
+        self.target = target
+        self.window_size = window_size
+        self.horizon = horizon
+        self.start = start
+        self.end = len(features) if end is None else end
+
+        if self.end - self.start < window_size + horizon:
+            raise ValueError("Not enough samples to construct a single window.")
+
+    def __len__(self) -> int:
+        return self.end - self.start - self.window_size - self.horizon + 1
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        idx = idx + self.start
+        window = self.features[idx : idx + self.window_size]
+        target_slice = self.target[idx + self.window_size : idx + self.window_size + self.horizon]
+
+        features = torch.from_numpy(window).float()
+        target = torch.from_numpy(target_slice).float()
+        return features, target
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def read_csv_with_fallback(path: Path, encoding: Optional[str]) -> pd.DataFrame:
+    encodings: Sequence[str] = [encoding] if encoding else ("utf-8", "latin1")
+    last_error: Optional[Exception] = None
+    for enc in encodings:
+        try:
+            with path.open("r", encoding=enc, errors="replace") as handle:
+                return pd.read_csv(handle)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise ValueError("Unable to read CSV with provided encodings.")
+
+
+def build_timestamp(df: pd.DataFrame) -> pd.Series:
+    lower_map = {str(col).lower(): col for col in df.columns}
+    if "timestamp" in lower_map:
+        ts = pd.to_datetime(df[lower_map["timestamp"]], errors="coerce")
+        if ts.notna().sum() > 0:
+            return ts
+
+    ymd = [lower_map.get("year"), lower_map.get("month"), lower_map.get("day")]
+    hour_candidates = [
+        "three-hourly observation time(utc)",
+        "hour",
+        "hours",
+        "time(utc)",
+        "observation time",
+        "hour(utc)",
+    ]
+    hour_col = next((lower_map[c] for c in hour_candidates if c in lower_map), None)
+    if all(col is not None for col in ymd) and hour_col is not None:
+        ts = pd.to_datetime(
+            {
+                "year": df[ymd[0]],
+                "month": df[ymd[1]],
+                "day": df[ymd[2]],
+                "hour": df[hour_col],
+            },
+            errors="coerce",
+        )
+        if ts.notna().sum() > 0:
+            return ts
+
+    for col in df.columns:
+        col_str = str(col).lower()
+        if "time" in col_str or "时间" in col_str:
+            ts = pd.to_datetime(df[col], errors="coerce")
+            if ts.notna().sum() > 0:
+                return ts
+
+    raise ValueError("Unable to infer timestamp column.")
+
+
+def resolve_column(df: pd.DataFrame, name: str) -> str:
+    if name in df.columns:
+        return name
+
+    lower_map = {str(col).lower(): col for col in df.columns}
+    name_lower = name.lower()
+    if name_lower in lower_map:
+        return lower_map[name_lower]
+
+    return ""
+
+
+def resolve_target_column(df: pd.DataFrame, target_col: str) -> str:
+    resolved = resolve_column(df, target_col)
+    if resolved:
+        return resolved
+
+    for col in df.columns:
+        col_str = str(col).lower()
+        if "temperature" in col_str or "气温" in col_str:
+            return col
+
+    raise KeyError(f"Target column not found: {target_col}. Available columns: {list(df.columns)}")
+
+
+def prepare_series(cfg: ExperimentConfig) -> Tuple[pd.Series, np.ndarray, np.ndarray]:
+    df = read_csv_with_fallback(cfg.data_path, cfg.encoding)
+    df = df.replace(["NA", "NaN", "nan", ""], pd.NA)
+    df["timestamp"] = build_timestamp(df)
+    df = df.dropna(subset=["timestamp"])
+    if df.empty:
+        raise ValueError("No valid timestamps after parsing.")
+
+    df = df.sort_values("timestamp")
+    target_col = resolve_target_column(df, cfg.target_col)
+
+    target = pd.to_numeric(df[target_col], errors="coerce")
+    target = target.interpolate(limit_direction="both").ffill().bfill()
+    if target.isna().all():
+        raise ValueError("Target column is entirely missing after cleaning.")
+
+    candidate_cols = [col for col in df.columns if col != "timestamp"]
+    if cfg.feature_cols:
+        resolved_features: List[str] = []
+        for name in cfg.feature_cols:
+            resolved = resolve_column(df, name)
+            if resolved:
+                resolved_features.append(resolved)
+        feature_cols = [col for col in resolved_features if col in candidate_cols]
+    else:
+        feature_cols = candidate_cols
+    if target_col not in feature_cols:
+        feature_cols.append(target_col)
+    if not feature_cols:
+        raise ValueError(f"No valid feature columns found. Available columns: {list(df.columns)}")
+
+    features_df = df[feature_cols].apply(pd.to_numeric, errors="coerce")
+    features_df = features_df.interpolate(limit_direction="both").ffill().bfill()
+
+    timestamps = df["timestamp"].to_numpy()
+    features = features_df.to_numpy(dtype=np.float32)
+    return target, features, timestamps
+
+
+def decompose_signal(signal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    try:
+        from PyEMD import EMD  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "PyEMD is required for EMD decomposition. Install with `pip install EMD-signal`."
+        ) from exc
+
+    emd = EMD()
+    imfs = emd.emd(signal)
+    if imfs.size == 0:
+        residue = signal
+    else:
+        residue = signal - np.sum(imfs, axis=0)
+    return imfs, residue
+
+
+def build_datasets(
+    features: np.ndarray,
+    target: np.ndarray,
+    split_idx: int,
+    window_size: int,
+    horizon: int,
+) -> Tuple[ComponentDataset, ComponentDataset]:
+    train_dataset = ComponentDataset(features, target, window_size, horizon, start=0, end=split_idx)
+    val_start = max(split_idx - window_size - horizon + 1, 0)
+    val_dataset = ComponentDataset(features, target, window_size, horizon, start=val_start)
+    return train_dataset, val_dataset
+
+
+def train_component(
+    features: np.ndarray,
+    target_series: np.ndarray,
+    split_idx: int,
+    cfg: ExperimentConfig,
+) -> Tuple[np.ndarray, np.ndarray]:
+    train_features = features[:split_idx]
+    feat_mean = train_features.mean(axis=0)
+    feat_std = train_features.std(axis=0)
+    feat_std[feat_std == 0] = 1.0
+    scaled_features = (features - feat_mean) / feat_std
+
+    train_target = target_series[:split_idx]
+    target_mean = float(train_target.mean())
+    target_std = float(train_target.std())
+    if target_std == 0:
+        target_std = 1.0
+    scaled_target = (target_series - target_mean) / target_std
+
+    train_dataset, val_dataset = build_datasets(
+        scaled_features,
+        scaled_target,
+        split_idx=split_idx,
+        window_size=cfg.input_window,
+        horizon=cfg.horizon,
+    )
+    train_loader = DataLoader(train_dataset, batch_size=cfg.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size, shuffle=False)
+
+    model = LSTMForecaster(
+        input_size=features.shape[1],
+        hidden_size=cfg.hidden_size,
+        horizon=cfg.horizon,
+        num_layers=cfg.num_layers,
+        dropout=cfg.dropout,
+    )
+
+    device = torch.device(cfg.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    model = model.to(device)
+
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.learning_rate)
+
+    for _ in range(cfg.epochs):
+        model.train()
+        for features, targets in train_loader:
+            features_tensor = torch.as_tensor(features).to(device)
+            targets_tensor = torch.as_tensor(targets).to(device)
+            optimizer.zero_grad()
+            preds = model(features_tensor)
+            loss = criterion(preds, targets_tensor)
+            loss.backward()
+            optimizer.step()
+
+    model.eval()
+    preds_list: List[torch.Tensor] = []
+    targets_list: List[torch.Tensor] = []
+    with torch.no_grad():
+        for features, targets in val_loader:
+            features_tensor = torch.as_tensor(features).to(device)
+            preds = model(features_tensor)
+            preds_list.append(preds.cpu())
+            targets_list.append(targets)
+
+    preds = torch.cat(preds_list).numpy()
+    targets = torch.cat(targets_list).numpy()
+
+    preds = preds * target_std + target_mean
+    targets = targets * target_std + target_mean
+    return preds, targets
+
+
+def aggregate_metrics(preds: np.ndarray, targets: np.ndarray) -> Tuple[float, float, float, float]:
+    diff = preds - targets
+    mse_all = float(np.mean(diff**2))
+    rmse_all = math.sqrt(mse_all)
+    mae_all = float(np.mean(np.abs(diff)))
+
+    step_diff = diff[:, 0]
+    mse_step1 = float(np.mean(step_diff**2))
+    rmse_step1 = math.sqrt(mse_step1)
+    mae_step1 = float(np.mean(np.abs(step_diff)))
+
+    return rmse_all, mae_all, rmse_step1, mae_step1
+
+
+def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    set_seed(cfg.seed)
+
+    target, features, timestamps = prepare_series(cfg)
+    signal = target.to_numpy(dtype=np.float32)
+
+    min_required = cfg.input_window + cfg.horizon
+    if len(signal) < min_required * 2:
+        raise ValueError("Not enough samples for the requested window/horizon.")
+
+    split_idx = int(len(signal) * cfg.train_ratio)
+    split_idx = max(split_idx, min_required)
+    split_idx = min(split_idx, len(signal) - min_required)
+
+    imfs, residue = decompose_signal(signal)
+    if cfg.max_imfs is not None and imfs.shape[0] > cfg.max_imfs:
+        imfs = imfs[: cfg.max_imfs]
+    components = [imf for imf in imfs] + [residue]
+
+    preds_components: List[np.ndarray] = []
+    targets_components: List[np.ndarray] = []
+
+    for comp in components:
+        preds, targets = train_component(features, comp, split_idx, cfg)
+        preds_components.append(preds)
+        targets_components.append(targets)
+
+    preds_sum = np.sum(preds_components, axis=0)
+    targets_sum = np.sum(targets_components, axis=0)
+
+    rmse_all, mae_all, rmse_step1, mae_step1 = aggregate_metrics(preds_sum, targets_sum)
+    print(f"RMSE (all steps): {rmse_all:.4f}")
+    print(f"MAE  (all steps): {mae_all:.4f}")
+    print(f"RMSE (t+1 only): {rmse_step1:.4f}")
+    print(f"MAE  (t+1 only): {mae_step1:.4f}")
+
+    start_time_idx = split_idx + cfg.input_window
+    indices = start_time_idx + np.arange(len(preds_sum))
+    indices = np.clip(indices, 0, len(timestamps) - 1)
+    time_axis = timestamps[indices]
+
+    if cfg.plot_path:
+        import matplotlib.pyplot as plt
+
+        plot_path = cfg.plot_path
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+
+        values_to_plot = slice(None)
+        if cfg.max_points is not None and cfg.max_points > 0:
+            values_to_plot = slice(-cfg.max_points, None)
+
+        plt.figure(figsize=(12, 5))
+        plt.plot(time_axis[values_to_plot], targets_sum[:, 0][values_to_plot], label="Actual", linewidth=2)
+        plt.plot(time_axis[values_to_plot], preds_sum[:, 0][values_to_plot], label="Predicted", linewidth=2)
+        plt.title(f"EMD-LSTM forecast (horizon {cfg.horizon}, first step)")
+        plt.xlabel("Timestamp")
+        plt.ylabel(cfg.target_col)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(plot_path)
+        plt.close()
+        print(f"Saved plot to {plot_path}")
+
+    return preds_sum, targets_sum, time_axis
