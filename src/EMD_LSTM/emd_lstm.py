@@ -3,10 +3,11 @@ from __future__ import annotations
 import math
 import random
 import time
+import threading
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,12 +37,17 @@ class ExperimentConfig:
     device: Optional[str] = None
     max_imfs: Optional[int] = 8
     max_points: Optional[int] = 2000
+    plot_last_days: Optional[int] = None
     plot_path: Optional[Path] = None
     log_path: Optional[Path] = None
     log_every: int = 1
     verbose: bool = True
     cudnn_benchmark: bool = True
     matmul_precision: Optional[str] = "high"
+    emd_log_interval: int = 300
+    max_samples: Optional[int] = None
+    emd_max_sift: Optional[int] = None
+    emd_spline_kind: Optional[str] = "slinear"
 
 
 def _log_message(cfg: ExperimentConfig, message: str) -> None:
@@ -77,6 +83,10 @@ def _log_header(cfg: ExperimentConfig) -> None:
         f"max_imfs={cfg.max_imfs}",
         f"matmul_precision={cfg.matmul_precision}",
         f"cudnn_benchmark={cfg.cudnn_benchmark}",
+        f"emd_log_interval={cfg.emd_log_interval}",
+        f"max_samples={cfg.max_samples}",
+        f"emd_max_sift={cfg.emd_max_sift}",
+        f"emd_spline_kind={cfg.emd_spline_kind}",
         "=" * 80,
     ]
     cfg.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +252,7 @@ def prepare_series(cfg: ExperimentConfig) -> Tuple[pd.Series, np.ndarray, np.nda
     return target, features, timestamps
 
 
-def decompose_signal(signal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def decompose_signal(signal: np.ndarray, cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray]:
     try:
         from PyEMD import EMD  # type: ignore
     except ImportError as exc:
@@ -250,15 +260,21 @@ def decompose_signal(signal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
             "PyEMD is required for EMD decomposition. Install with `pip install EMD-signal`."
         ) from exc
 
-    emd = EMD()
+    emd_kwargs: dict[str, Any] = {}
+    if cfg.emd_max_sift is not None:
+        emd_kwargs["max_sift"] = cfg.emd_max_sift
+    if cfg.max_imfs is not None:
+        emd_kwargs["max_imf"] = cfg.max_imfs
+    if cfg.emd_spline_kind:
+        emd_kwargs["spline_kind"] = str(cfg.emd_spline_kind)
+
+    emd = EMD(**emd_kwargs) if emd_kwargs else EMD()
     imfs = emd.emd(signal)
     if imfs.size == 0:
         residue = signal
     else:
         residue = signal - np.sum(imfs, axis=0)
     return imfs, residue
-
-
 def build_datasets(
     features: np.ndarray,
     target: np.ndarray,
@@ -379,6 +395,13 @@ def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.nd
     target, features, timestamps = prepare_series(cfg)
     signal = target.to_numpy(dtype=np.float32)
 
+    if cfg.max_samples is not None and cfg.max_samples > 0 and len(signal) > cfg.max_samples:
+        start_idx = len(signal) - cfg.max_samples
+        _log_message(cfg, f"Truncating to last {cfg.max_samples} samples (from {len(signal)})")
+        signal = signal[start_idx:]
+        features = features[start_idx:]
+        timestamps = timestamps[start_idx:]
+
     min_required = cfg.input_window + cfg.horizon
     if len(signal) < min_required * 2:
         raise ValueError("Not enough samples for the requested window/horizon.")
@@ -387,9 +410,26 @@ def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.nd
     split_idx = max(split_idx, min_required)
     split_idx = min(split_idx, len(signal) - min_required)
 
-    _log_message(cfg, "Starting EMD decomposition...")
+    extrema = (
+        int(np.sum(np.diff(np.sign(np.diff(signal))) != 0)) if len(signal) > 2 else 0
+    )
+    _log_message(cfg, f"Starting EMD decomposition (samples={len(signal)}, extrema={extrema})...")
     emd_start = time.time()
-    imfs, residue = decompose_signal(signal)
+    stop_event = threading.Event()
+
+    def _emd_heartbeat() -> None:
+        while not stop_event.wait(cfg.emd_log_interval):
+            elapsed = time.time() - emd_start
+            _log_message(cfg, f"EMD still running... elapsed {elapsed:.1f}s")
+
+    heartbeat_thread: Optional[threading.Thread] = None
+    if cfg.emd_log_interval > 0:
+        heartbeat_thread = threading.Thread(target=_emd_heartbeat, daemon=True)
+        heartbeat_thread.start()
+    imfs, residue = decompose_signal(signal, cfg)
+    stop_event.set()
+    if heartbeat_thread is not None:
+        heartbeat_thread.join(timeout=1.0)
     _log_message(cfg, f"EMD decomposition done in {time.time() - emd_start:.1f}s")
     if cfg.max_imfs is not None and imfs.shape[0] > cfg.max_imfs:
         imfs = imfs[: cfg.max_imfs]
@@ -427,12 +467,26 @@ def run_experiment(cfg: ExperimentConfig) -> Tuple[np.ndarray, np.ndarray, np.nd
         plot_path.parent.mkdir(parents=True, exist_ok=True)
 
         values_to_plot = slice(None)
-        if cfg.max_points is not None and cfg.max_points > 0:
+        time_to_plot = time_axis
+        preds_to_plot = preds_sum[:, 0]
+        targets_to_plot = targets_sum[:, 0]
+
+        if cfg.plot_last_days is not None and cfg.plot_last_days > 0:
+            cutoff = time_axis[-1] - np.timedelta64(cfg.plot_last_days, "D")
+            mask = time_axis >= cutoff
+            if mask.any():
+                time_to_plot = time_axis[mask]
+                preds_to_plot = preds_sum[:, 0][mask]
+                targets_to_plot = targets_sum[:, 0][mask]
+        elif cfg.max_points is not None and cfg.max_points > 0:
             values_to_plot = slice(-cfg.max_points, None)
+            time_to_plot = time_axis[values_to_plot]
+            preds_to_plot = preds_sum[:, 0][values_to_plot]
+            targets_to_plot = targets_sum[:, 0][values_to_plot]
 
         plt.figure(figsize=(12, 5))
-        plt.plot(time_axis[values_to_plot], targets_sum[:, 0][values_to_plot], label="Actual", linewidth=2)
-        plt.plot(time_axis[values_to_plot], preds_sum[:, 0][values_to_plot], label="Predicted", linewidth=2)
+        plt.plot(time_to_plot, targets_to_plot, label="Actual", linewidth=2)
+        plt.plot(time_to_plot, preds_to_plot, label="Predicted", linewidth=2)
         plt.title(f"EMD-LSTM forecast (horizon {cfg.horizon}, first step)")
         plt.xlabel("Timestamp")
         plt.ylabel(cfg.target_col)

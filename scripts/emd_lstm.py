@@ -47,10 +47,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-every", type=int, default=1, help="Log every N epochs.")
     parser.add_argument("--quiet", action="store_true", help="Disable console logging.")
     parser.add_argument(
+        "--emd-log-interval",
+        type=int,
+        default=300,
+        help="Seconds between EMD heartbeat logs (0 to disable).",
+    )
+    parser.add_argument(
         "--max-imfs",
         type=int,
         default=8,
         help="Maximum number of IMFs to model (use 0 for all).",
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Use only the last N samples for EMD/training (skip if not set).",
+    )
+    parser.add_argument(
+        "--emd-max-sift",
+        type=int,
+        default=None,
+        help="Maximum sifting iterations per IMF (PyEMD max_sift).",
+    )
+    parser.add_argument(
+        "--emd-spline-kind",
+        type=str,
+        default="slinear",
+        help="Spline kind for PyEMD (e.g., slinear/cubic).",
     )
     parser.add_argument(
         "--plot",
@@ -89,6 +113,10 @@ def main() -> None:
         log_path=args.log_path,
         log_every=args.log_every,
         verbose=not args.quiet,
+        emd_log_interval=args.emd_log_interval,
+        max_samples=args.max_samples,
+        emd_max_sift=args.emd_max_sift,
+        emd_spline_kind=args.emd_spline_kind,
         max_imfs=None if args.max_imfs == 0 else args.max_imfs,
         max_points=None if args.max_points == 0 else args.max_points,
         plot_path=args.plot,
