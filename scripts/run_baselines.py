@@ -56,6 +56,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--log-path", type=Path, default=None, help="Optional log file path.")
     parser.add_argument("--quiet", action="store_true", help="Disable console logging.")
+    parser.add_argument(
+        "--plot",
+        type=Path,
+        default=None,
+        help="Optional path to save a bar chart comparing RMSE/MAE across models.",
+    )
     return parser.parse_args()
 
 
@@ -111,6 +117,21 @@ def main() -> None:
     ):
         output = table.to_string(index=False)
         log_message(cfg, output)
+
+    if args.plot:
+        import matplotlib.pyplot as plt
+
+        args.plot.parent.mkdir(parents=True, exist_ok=True)
+        plt.figure(figsize=(10, 5))
+        plt.bar(table["model"], table["rmse"], label="RMSE")
+        plt.bar(table["model"], table["mae"], label="MAE", alpha=0.7)
+        plt.ylabel("Error")
+        plt.title("Baseline comparison")
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(args.plot)
+        plt.close()
+        log_message(cfg, f"Saved baseline comparison plot to {args.plot}")
 
 
 if __name__ == "__main__":

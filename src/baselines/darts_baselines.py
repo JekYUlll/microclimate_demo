@@ -18,9 +18,11 @@ from darts.models import (
 try:  # optional deep models
     from darts.models import NBEATSModel
     from darts.models import TFTModel
+    from darts.models.forecasting.forecasting_model import LocalForecastingModel
 except Exception:  # noqa: BLE001
     NBEATSModel = None  # type: ignore[assignment]
     TFTModel = None  # type: ignore[assignment]
+    LocalForecastingModel = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -80,6 +82,7 @@ def build_model(name: str, cfg: BaselineConfig):
             random_state=cfg.seed,
             force_reset=True,
             pl_trainer_kwargs=cfg.pl_trainer_kwargs,
+            add_relative_index=True,
         )
     raise ValueError(f"Unknown model name: {name}")
 
@@ -125,12 +128,16 @@ def evaluate_model(
     start = time.time()
     model.fit(train_series)
 
+    retrain_flag = False
+    if LocalForecastingModel is not None and isinstance(model, LocalForecastingModel):
+        retrain_flag = True
+
     forecasts = model.historical_forecasts(
         series,
         start=split_idx,
         forecast_horizon=cfg.horizon,
         stride=cfg.stride,
-        retrain=False,
+        retrain=retrain_flag,
         last_points_only=False,
     )
     preds = _stack_forecasts(forecasts)
