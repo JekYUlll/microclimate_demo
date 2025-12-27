@@ -13,6 +13,7 @@ This file summarizes the runnable scripts under `scripts/` (and `scripts/baselin
 ### Baseline subcommands (`scripts/baselines/`)
 - `run_naive.py` – Evaluates NaiveMean and NaiveSeasonal. CLI: data/target/encoding/freq/horizon/train_ratio/stride/season_length/max_windows/log_path/quiet/plot. Outputs table + optional bar plot.
 - `run_arima.py` – Evaluates ARIMA (p,d,q from `--arima`). Same CLI shape as above; supports `max_windows`, `plot` bar chart.
+- `run_tcn.py` – Evaluates TCN baseline. CLI: data/target/encoding/freq/horizon/input-window/train_ratio/stride/max_windows/epochs/kernel_size/num_filters/dilation_base/dropout/devices/log_path/quiet/plot.
 - `run_tft.py` – Evaluates TFT baseline only. CLI: data/target/encoding/freq/horizon/input-window/train_ratio/stride/max_windows/epochs/hidden/num_heads/dropout/devices/log_path/quiet/plot. Uses `add_relative_index=True` to auto-generate future covariates; Lightning trainer uses GPU devices if provided.
 
 ### Key module links (for reference while reading scripts)
