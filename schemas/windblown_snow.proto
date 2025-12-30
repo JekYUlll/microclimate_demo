@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package schemas;
+
+import "google/protobuf/timestamp.proto";
+
+message SensorMeta {
+  string sensor_id = 1;
+  string site = 2;
+  double latitude = 3;
+  double longitude = 4;
+  double elevation_m = 5;
+  string manufacturer = 6;
+  string firmware = 7;
+}
+
+// Represents a binned spectrum slice (size or velocity). Keep bin edges fixed over time.
+message SpectrumBin {
+  double lower_um = 1;            // lower bound of bin in micrometers
+  double upper_um = 2;            // upper bound of bin in micrometers
+  double mean_velocity_ms = 3;    // optional mean particle velocity in m/s for this bin
+  double number_flux_m2_s = 4;    // particle count flux per m^2 per second
+  double mass_flux_kg_m2_s = 5;   // mass flux per m^2 per second
+}
+
+// A single timestamped observation with scalar features and spectra.
+message SnowObservation {
+  google.protobuf.Timestamp timestamp = 1;
+  SensorMeta meta = 2;
+
+  // Scalar meteorology
+  double air_temperature_c = 3;
+  double relative_humidity = 4;
+  double air_pressure_pa = 5;
+  double wind_speed_ms = 6;
+  double wind_direction_deg = 7;
+  double solar_radiation_wm2 = 8;
+  double snow_surface_temperature_c = 9;
+
+  // Snow transport
+  double snow_mass_flux_kg_m2_s = 10;
+  double snow_number_flux_m2_s = 11;
+
+  // Spectral distributions
+  repeated SpectrumBin size_spectrum = 12;     // particle size distribution (bins must be consistent across time)
+  repeated SpectrumBin velocity_spectrum = 13; // particle velocity distribution
+
+  // Flow/turbulence
+  double turbulence_intensity = 14;
+  double friction_velocity_ms = 15;
+  double ri_bulk = 16;              // bulk Richardson number
+  string stability_flag = 17;       // e.g., stable/neutral/unstable
+
+  // Optional environment
+  double snow_density_kg_m3 = 18;
+  double snow_grain_temp_c = 19;
+  double visibility_m = 20;
+  double precip_rate_mm_h = 21;
+
+  // Quality and provenance
+  string quality_flag = 22;   // e.g., good/suspect/missing
+  string data_source = 23;    // logger name or simulation tag
+  string missing_reason = 24; // optional textual reason
+
+  // Derived numeric features (rolling stats, thresholds, energy balance estimates, etc.)
+  map<string, double> derived = 25;
+}
+
+// Batch container for transporting/archiving time-series windows.
+message SnowTimeSeries {
+  string coordinate_system = 1; // e.g., "EPSG:4326"
+  double sampling_hz = 2;       // expected sampling rate
+  repeated SnowObservation observations = 3;
+  map<string, string> attributes = 4; // free-form global metadata
+}
+
