@@ -16,6 +16,14 @@ This file summarizes the runnable scripts under `scripts/` (and `scripts/baselin
 - `run_tcn.py` – Evaluates TCN baseline. CLI: data/target/encoding/freq/horizon/input-window/train_ratio/stride/max_windows/epochs/kernel_size/num_filters/dilation_base/dropout/devices/log_path/quiet/plot.
 - `run_tft.py` – Evaluates TFT baseline only. CLI: data/target/encoding/freq/horizon/input-window/train_ratio/stride/max_windows/epochs/hidden/num_heads/dropout/devices/log_path/quiet/plot. Uses `add_relative_index=True` to auto-generate future covariates; Lightning trainer uses GPU devices if provided.
 
+### Notebook (`train.ipynb`)
+- Purpose: wind-blown snow TFT sandbox that wires SnowTFT + physics penalty + load post-processing for quick experimentation.
+- Data/feats: loads `data/synthetic/windblown_snow_sample.csv`, parses `timestamp`, and z-scores features. Known history columns live in `KNOWN_COLS` (wind/air state + flux proxies), known future in `KNOWN_FUTURE_COLS` (solar, wind direction). Targets: `air_temperature_c`, `wind_speed_ms`, `snow_mass_flux_kg_m2_s`, `snow_surface_temperature_c`. Optional spectra columns (`size_bin_*`, `velocity_bin_*`) join the known set when `use_spectra_as_known=True`; one-hot dummies from `stability_flag`, `quality_flag`, `data_source` are appended.
+- Data loaders: uses `src/snow_dataset.build_loaders` with `window_size=24`, `horizon=6`, `train_ratio=0.8`, `batch_size=64`; `future_known_idx` is derived from `KNOWN_FUTURE_COLS`.
+- Model: builds `src/tft_model.SnowTFT(input_dim=len(KNOWN), target_dim=len(TARGET_COLS), known_future_dim=len(future_known_idx), d_model=128, nhead=4, num_layers=2)`, trains with Adam (`lr=1e-3`) + `nn.MSELoss` on CUDA if available.
+- Physics term: `physics_penalty` from `src/physics_losses.py` unnormalizes drivers (wind, friction velocity, temps, radiation, RH, stability dummies) and enforces threshold/monotonicity heuristics; combined loss is `mse + 0.1 * physics_penalty` in `run_epoch`.
+- Extras/plots: validation plots compare true vs predicted horizons (`matplotlib`). A sample block derives load parameters from the first predicted step using `src/physics_calculations.ParticleBin` + `summarize_loads` (mass/momentum/energy flux, impact pressure, density/hardness/viscosity). A final block concatenates validation batches for a longer timeline view.
+
 ### Key module links (for reference while reading scripts)
 - RAW LSTM utilities live in `src/RAW_LSTM/` (`config.py`, `data.py`, `model.py`).
 - EMD LSTM core pipeline is in `src/EMD_LSTM/emd_lstm.py` (EMD controls, logging, plotting, optional truncation).
