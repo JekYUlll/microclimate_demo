@@ -1,0 +1,2 @@
+station_id,input,output,rows_read,rows_out,duplicates_removed,first_timestamp,last_timestamp
+Taishan,data/AntAWS/3_hourly/Taishan_3h.csv,data/processed/antaws_demo_q2_taishan/Taishan.csv,24968,24968,0,2012-12-24 00:00:00,2021-07-10 21:00:00

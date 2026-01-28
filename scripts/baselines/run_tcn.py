@@ -14,10 +14,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.baselines.common import SeriesConfig, log_header, log_message, prepare_series  # noqa: E402
+from src.utils.config import load_config, ensure_dirs, resolve_config  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run TCN baseline.")
+    parser.add_argument("--config", type=Path, default=None, help="Optional config YAML for defaults.")
+    parser.add_argument("--exp-id", type=str, default=None, help="Experiment id (overrides config).")
     parser.add_argument("--data", type=Path, required=True, help="Path to the station CSV file.")
     parser.add_argument("--target-col", type=str, required=True, help="Target column name in the CSV.")
     parser.add_argument("--encoding", type=str, default=None, help="Optional file encoding.")
@@ -119,6 +122,31 @@ def evaluate(series: TimeSeries, values, cfg) -> List[dict]:
 
 def main() -> None:
     args = parse_args()
+    if args.config:
+        cfg = load_config(args.config)
+        if args.exp_id:
+            cfg["exp_id"] = args.exp_id
+            cfg = resolve_config(cfg)
+        ensure_dirs(cfg)
+        station_id = cfg.get("station_id_main")
+        args.data = cfg["processed_dir"] / f"{station_id}.csv"
+        targets = cfg.get("columns", {}).get("targets", [])
+        if targets:
+            args.target_col = targets[0]
+        args.freq = cfg.get("freq")
+        args.horizon = max(cfg.get("horizons", [args.horizon]))
+        args.input_window = int(cfg.get("window_size", args.input_window))
+        args.train_ratio = float(cfg.get("split", {}).get("train", args.train_ratio))
+        args.stride = int(cfg.get("stride", args.stride))
+        tcn_cfg = cfg.get("models", {}).get("tcn", {})
+        args.epochs = int(tcn_cfg.get("epochs", args.epochs))
+        args.kernel_size = int(tcn_cfg.get("kernel_size", args.kernel_size))
+        args.num_filters = int(tcn_cfg.get("channels", [args.num_filters])[-1])
+        args.dropout = float(tcn_cfg.get("dropout", args.dropout))
+        if args.plot is None:
+            args.plot = cfg["reports_dir"] / "figures" / "tcn_baseline.png"
+        if args.log_path is None:
+            args.log_path = cfg["reports_dir"] / "tables" / "tcn_baseline_log.txt"
     cfg = SeriesConfig(
         data_path=args.data,
         target_col=args.target_col,

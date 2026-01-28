@@ -1,3 +1,6 @@
 {
-    "chatgpt.openOnStartup": false
+    "chatgpt.openOnStartup": false,
+    "python.analysis.extraPaths": [
+        "./legacy/windblown_snow/src"
+    ]
 }

@@ -1,0 +1,2 @@
+station_id,input,output,rows_read,rows_out,duplicates_removed,first_timestamp,last_timestamp
+Cape Hallett,data/AntAWS/3_hourly/Cape Hallett_3h.csv,data/processed/antaws_demo_q2/Cape Hallett.csv,26776,26776,0,2011-01-01 00:00:00,2020-02-29 21:00:00
