@@ -1,2 +1,0 @@
-exp_id,station_id_main,freq,resample_freq,targets,horizons,window_size,split_mode,split_train,split_val,split_test
-antaws_demo_q2_zhongshan,Zhongshan,3H,,"temperature_c,wind_speed_ms","1,2,4,8",24,ratio,0.7,0.1,0.2

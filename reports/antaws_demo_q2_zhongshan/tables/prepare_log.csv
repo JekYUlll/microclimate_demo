@@ -1,2 +1,0 @@
-station_id,input,output,rows_read,rows_out,duplicates_removed,first_timestamp,last_timestamp
-Zhongshan,data/AntAWS/3_hourly/Zhongshan_3h.csv,data/processed/antaws_demo_q2_zhongshan/Zhongshan.csv,93032,93032,0,1989-03-01 00:00:00,2020-12-31 21:00:00
