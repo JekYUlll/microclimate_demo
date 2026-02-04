@@ -1,0 +1,4 @@
+imputation:
+  name: gp
+  length_scale: 5.0
+  noise: 1e-3

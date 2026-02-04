@@ -1,0 +1,8 @@
+model:
+  name: informer
+  d_model: 64
+  nhead: 4
+  num_layers: 2
+  dim_feedforward: 128
+  dropout: 0.1
+  prob_sparse_factor: 5

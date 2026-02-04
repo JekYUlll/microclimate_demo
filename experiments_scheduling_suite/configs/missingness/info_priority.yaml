@@ -1,0 +1,8 @@
+missingness:
+  name: info_priority
+  budget_k: 2
+  min_on_steps: 3
+  weight_method: train_corr
+  lag_steps: [0, 1, 2, 4]
+  refresh_steps: null
+  target_always_observed: true

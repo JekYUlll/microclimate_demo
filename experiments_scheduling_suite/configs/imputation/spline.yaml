@@ -1,0 +1,4 @@
+imputation:
+  name: spline
+  order: 3
+  limit_direction: both

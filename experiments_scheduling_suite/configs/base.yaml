@@ -1,0 +1,33 @@
+run:
+  seed: 42
+  base_freq: "1S"
+  lookback: 60
+  horizons: [1, 2, 3]
+  target: "wind_speed_ms"
+  max_windows: null
+  quick_mode: false
+
+paths:
+  raw_dir: data/raw
+  generated_dir: data/generated
+  processed_dir: data/processed
+  reports_dir: reports
+
+features:
+  use_wind_dir_sincos: true
+  onehot_stability_flag: true
+
+split:
+  train: 0.7
+  val: 0.1
+  test: 0.2
+
+normalize:
+  method: standard
+
+training:
+  epochs: 10
+  batch_size: 64
+  lr: 0.001
+  weight_decay: 0.0
+  device: "cpu"

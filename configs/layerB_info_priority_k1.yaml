@@ -1,0 +1,76 @@
+exp_id: layerB_info_priority_k1
+station_id_main: "Cape Hallett"
+freq: 3H
+resample_freq: null
+seed: 42
+
+paths:
+  raw_root: data/AntAWS/3_hourly
+  processed_root: data/processed
+  reports_root: reports
+  models_root: models
+
+columns:
+  targets:
+    - temperature_c
+
+horizons: [1, 2, 8]
+window_size: 24
+stride: 1
+max_windows: null
+
+split:
+  mode: ratio
+  train: 0.7
+  val: 0.1
+  test: 0.2
+
+impute:
+  strategy: B
+  max_gap_steps: 4
+  strategy_b: stl
+
+features:
+  rolling_windows: [2, 8]
+  diff_steps: [1, 2]
+  include_time_features: true
+  include_missing_features: true
+
+sampling:
+  enable: true
+  strategy: info_priority
+  temp_always_on: true
+  budget_k: 1
+  min_on_steps: 2
+  warmup_steps: 0
+  info_priority:
+    weight_source: train_corr
+    lag_steps: [0, 1, 2, 4]
+    update_every_steps: 240
+  # segments_file: reports/<exp_id>/tables/layerB_station_segments.csv
+  # station_list_file: data/processed/<exp_id>/layerB_station_list.txt
+
+models:
+  tft:
+    d_model: 128
+    nhead: 4
+    num_layers: 2
+    dropout: 0.1
+    lr: 0.001
+    epochs: 20
+    batch_size: 64
+    weight_decay: 0.0
+  tcn:
+    channels: [32, 32]
+    kernel_size: 3
+    dropout: 0.1
+    lr: 0.001
+    epochs: 20
+    batch_size: 64
+
+baseline:
+  season_length: 8
+
+extremes:
+  top_pct: 0.1
+  bottom_pct: 0.1

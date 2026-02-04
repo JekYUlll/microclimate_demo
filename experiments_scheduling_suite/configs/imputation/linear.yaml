@@ -1,0 +1,3 @@
+imputation:
+  name: linear
+  limit_direction: both

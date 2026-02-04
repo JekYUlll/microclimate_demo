@@ -1,0 +1,7 @@
+missingness:
+  name: duty_cycle
+  period_steps: 20
+  on_steps: 5
+  random_phase: true
+  budget_k: null
+  target_always_observed: true

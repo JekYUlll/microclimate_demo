@@ -1,0 +1,5 @@
+missingness:
+  name: mcar
+  p_missing: 0.2
+  per_variable: {}
+  target_always_observed: true

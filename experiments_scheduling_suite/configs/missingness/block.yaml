@@ -1,0 +1,7 @@
+missingness:
+  name: block
+  n_blocks: 10
+  min_len_steps: 5
+  max_len_steps: 20
+  per_variable: true
+  target_always_observed: true

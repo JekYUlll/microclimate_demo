@@ -1,0 +1,6 @@
+dataset:
+  mode: synthetic
+  name: synthetic_windblown
+  output_csv: synthetic_windblown.csv
+  rows: 2000
+  freq_seconds: 1
