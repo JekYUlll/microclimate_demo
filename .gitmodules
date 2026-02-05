@@ -1,0 +1,3 @@
+[submodule "experiments_scheduling_suite"]
+	path = experiments_scheduling_suite
+	url = git@github.com:JekYUlll/experiments_scheduling_suite.git
