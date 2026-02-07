@@ -1,6 +1,6 @@
 ## Project Scripts Overview
 
-This file summarizes runnable scripts under `scripts/` (and `scripts/baselines/`) plus the current AntAWS demo pipeline.
+This file summarizes runnable scripts under `scripts/` (and `scripts/baselines/`) plus the independent scheduling suite in `experiments_scheduling_suite/`.
 
 ### Core pipeline (AntAWS demo)
 - `scripts/run_all.py` – One-command pipeline driven by `configs/exp.yaml`. Calls: prepare -> profile -> group -> dataset -> baselines -> TFT+PINN -> imputation compare -> eval -> figures. Writes `reports/<exp_id>/tables/exp_summary.csv`, `reports/<exp_id>/tables/config_used.yaml`, and `reports/<exp_id>/tables/pip_freeze.txt`.
@@ -20,6 +20,35 @@ This file summarizes runnable scripts under `scripts/` (and `scripts/baselines/`
 - `run_arima.py` – ARIMA baseline (Darts). Supports `--config/--exp-id`.
 - `run_tcn.py` – Darts TCN baseline. Supports `--config/--exp-id`.
 - `run_tft.py` – Darts TFT baseline. Supports `--config/--exp-id`.
+
+### Independent experiment suite (`experiments_scheduling_suite/`)
+Standalone scheduling/imputation/model sweep with no imports from the root project.
+
+Core scripts:
+- `experiments_scheduling_suite/scripts/00_generate_data.py` – Generate synthetic or validate real CSV input.
+- `experiments_scheduling_suite/scripts/01_prepare_dataset.py` – Resample, apply missingness, impute, normalize, split, window into `dataset.npz`.
+- `experiments_scheduling_suite/scripts/02_visualize_pretrain.py` – Pre-train dataset characterization plots.
+- `experiments_scheduling_suite/scripts/03_train_models.py` – Train models and save per-horizon predictions.
+- `experiments_scheduling_suite/scripts/04_evaluate.py` – Compute RMSE/MAE/MAPE tables.
+- `experiments_scheduling_suite/scripts/05_plot_predictions.py` – Per-model prediction plots (H=1/2/3).
+- `experiments_scheduling_suite/scripts/06_plot_summary.py` – Summary figure (overlay + zoom + radar).
+- `experiments_scheduling_suite/scripts/07_run_sweep.py` – Sweep runner (prepare -> viz -> train -> eval -> plots).
+- `experiments_scheduling_suite/scripts/run_full_sweep.sh` – Shell script for full combinatorial sweep.
+
+Posthoc analysis:
+- `experiments_scheduling_suite/scripts/08_collect_results.py` – Collect metrics + metadata into `_aggregate` tables.
+- `experiments_scheduling_suite/scripts/09_plot_cross_strategy.py` – Cross-strategy plots.
+- `experiments_scheduling_suite/scripts/10_event_based_eval.py` – Event vs non-event error analysis.
+- `experiments_scheduling_suite/scripts/11_significance_tests.py` – Statistical tests.
+- `experiments_scheduling_suite/scripts/12_make_posthoc_report.py` – Aggregate report generation.
+- `experiments_scheduling_suite/scripts/13_plot_strategy_predictions.py` – Strategy-level prediction overlays.
+
+Configs:
+- `experiments_scheduling_suite/configs/base.yaml` – Base run/training settings.
+- `experiments_scheduling_suite/configs/datasets/*.yaml` – Synthetic vs real datasets.
+- `experiments_scheduling_suite/configs/missingness/*.yaml` – MCAR/block/duty_cycle/round_robin/info_priority + variants.
+- `experiments_scheduling_suite/configs/imputation/*.yaml` – Mask-aware/linear/spline/kalman/gp.
+- `experiments_scheduling_suite/configs/models/*.yaml` – LSTM/Transformer/Informer/TCN/MLP/XGBoost/Naive.
 
 ### Other utilities
 - `scripts/evaluate_datasets.py` – Scans CSV datasets for time-series readiness (timestamp inference, dominant freq, missing rates, longest gaps, duplicates).
@@ -42,7 +71,11 @@ This file summarizes runnable scripts under `scripts/` (and `scripts/baselines/`
 
 ### Legacy/obsolete (kept for reference)
 - `scripts/prepare_data.py`, `scripts/train_lstm.py`, `scripts/evaluate_lstm.py`, and `src/EMD_LSTM/emd_lstm.py` still reference deleted `src/RAW_LSTM` modules and are not runnable without refactor.
-- Wind-blown snow sandbox assets now live under `legacy/windblown_snow/` (not used by current pipeline):\n  - `legacy/windblown_snow/src/` (legacy SnowTFT, dataset, physics helpers)\n  - `legacy/windblown_snow/scripts/generate_fake_snow_data.py`\n  - `legacy/windblown_snow/data/synthetic/windblown_snow_sample.csv`\n  - `legacy/windblown_snow/docs/windblown_snow_data_spec.md`
+- Wind-blown snow sandbox assets now live under `legacy/windblown_snow/` (not used by current pipeline):
+  - `legacy/windblown_snow/src/` (legacy SnowTFT, dataset, physics helpers)
+  - `legacy/windblown_snow/scripts/generate_fake_snow_data.py`
+  - `legacy/windblown_snow/data/synthetic/windblown_snow_sample.csv`
+  - `legacy/windblown_snow/docs/windblown_snow_data_spec.md`
 
 ### Notes
 - All plotting paths create parent directories when needed.
