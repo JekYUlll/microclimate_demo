@@ -1,6 +1,11 @@
 {
     "chatgpt.openOnStartup": false,
     "python.analysis.extraPaths": [
-        "./legacy/windblown_snow/src"
-    ]
+        "./src",
+        "./legacy/windblown_snow/src",
+        "./experiments_scheduling_suite/src",
+        "./rl_sensor_scheduling_framework/src"
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:conda",
+    "python-envs.defaultPackageManager": "ms-python.python:conda"
 }

@@ -1,4 +1,38 @@
 {
     "venvPath": ".",
-    "venv": "venv"
+    "venv": "venv",
+    "include": [
+        "scripts",
+        "src",
+        "legacy/windblown_snow",
+        "experiments_scheduling_suite",
+        "rl_sensor_scheduling_framework"
+    ],
+    "extraPaths": [
+        "./src",
+        "./legacy/windblown_snow/src",
+        "./experiments_scheduling_suite/src",
+        "./rl_sensor_scheduling_framework/src"
+    ],
+    "executionEnvironments": [
+        {
+            "root": "./experiments_scheduling_suite",
+            "extraPaths": [
+                "./experiments_scheduling_suite/src"
+            ]
+        },
+        {
+            "root": "./rl_sensor_scheduling_framework",
+            "extraPaths": [
+                "./rl_sensor_scheduling_framework/src"
+            ]
+        },
+        {
+            "root": "./",
+            "extraPaths": [
+                "./src",
+                "./legacy/windblown_snow/src"
+            ]
+        }
+    ]
 }
