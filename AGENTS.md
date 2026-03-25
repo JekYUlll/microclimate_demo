@@ -69,9 +69,12 @@ Important RL design note:
   - `rl_sensor_scheduling_framework/src/scheduling/rl/dqn_agent.py` – legacy discrete-action DQN.
   - `rl_sensor_scheduling_framework/src/scheduling/rl/score_dqn_agent.py` – windblown subset-conditioned DQN and constrained subset-conditioned DQN.
   - `rl_sensor_scheduling_framework/src/scheduling/rl/constrained_dqn_agent.py` – CMDP dual-variable layer for the legacy discrete-action DQN.
+  - `rl_sensor_scheduling_framework/src/scheduling/rl/sb3_ppo.py` – Stable-Baselines3 PPO baseline wrapped around the windblown online-subset projector.
   - `rl_sensor_scheduling_framework/src/scheduling/rl/q_network.py` – Q-networks, including `SubsetQNetwork` used by the current windblown RL path.
   - `rl_sensor_scheduling_framework/src/scheduling/online_projector.py` – online feasible-subset projector.
-- No PPO / A2C / SAC / actor-critic implementation is currently used.
+- External RL baseline currently included:
+  - `ppo` via Stable-Baselines3; action = continuous per-sensor scores, execution = projector-feasible subset.
+- No A2C / SAC / actor-critic implementation beyond the PPO baseline is currently used.
 
 Current reward design is **Scheme A infrastructure with direct primary-target reward active by default**:
 - RL is not trained end-to-end with downstream predictor retraining.
@@ -98,7 +101,7 @@ The frozen forecast-reward oracle is still trained **before** RL on a disjoint `
 Core scripts:
 - `rl_sensor_scheduling_framework/scripts/00_generate_business_data.py` – Generate the shared high-frequency truth CSV for the business case. Typical output: `rl_sensor_scheduling_framework/data/generated/windblown_truth.csv`.
 - `rl_sensor_scheduling_framework/scripts/00b_pretrain_reward_predictor.py` – Train the frozen auxiliary reward predictor on the `reward_pretrain` split only and save `reward_predictor.pt`.
-- `rl_sensor_scheduling_framework/scripts/01_train_rl_scheduler.py` – Train one scheduler on the truth environment. For rule-based schedulers, this computes repeated rollout metrics; for RL schedulers (`dqn`, `cmdp_dqn`), this performs value-based training and writes `scheduler_<name>.pt`.
+- `rl_sensor_scheduling_framework/scripts/01_train_rl_scheduler.py` – Train one scheduler on the truth environment. For rule-based schedulers, this computes repeated rollout metrics; for RL schedulers (`dqn`, `cmdp_dqn`, `ppo`), this performs learning and writes the scheduler checkpoint (`.pt` for DQN family, `.zip` for PPO).
 - `rl_sensor_scheduling_framework/scripts/02_evaluate_scheduler.py` – Evaluate one scheduler on the held-out test split of the truth environment and write `metrics_estimation_eval.csv`.
 - `rl_sensor_scheduling_framework/scripts/03_build_forecast_dataset.py` – Replay a trained/evaluated scheduler over the full truth sequence and export one scheduler-specific dataset NPZ containing `input_series` (estimated state), `target_series` (truth targets), `observed_mask`, `event_flags`, `power`, `trace_p`, and `feature_names`.
 - `rl_sensor_scheduling_framework/scripts/04_train_predictors.py` – Split the scheduler-specific dataset into train/val/test windows, normalize with train statistics, train one predictor, and save `forecast_predictions.npz` + `metrics_forecast.csv`.
@@ -117,7 +120,7 @@ Main configs:
 - `rl_sensor_scheduling_framework/configs/sensors/windblown_sensors.yaml` – sensor definitions, observed variables, and power / startup-peak costs.
 - `rl_sensor_scheduling_framework/configs/estimator/kalman.yaml` – linear Gaussian estimator settings.
 - `rl_sensor_scheduling_framework/configs/reward/lstm_aux.yaml` – frozen auxiliary reward-predictor config used by Scheme A.
-- `rl_sensor_scheduling_framework/configs/scheduler/*.yaml` – `full_open`, `random`, `periodic`, `round_robin`, `info_priority`, `dqn`, `cmdp_dqn`.
+- `rl_sensor_scheduling_framework/configs/scheduler/*.yaml` – `full_open`, `random`, `periodic`, `round_robin`, `info_priority`, `dqn`, `cmdp_dqn`, `ppo`.
 - `rl_sensor_scheduling_framework/configs/predictor/*.yaml` – `naive`, `mlp`, `lstm`, `transformer`, `informer`, `tcn`, `pinn`, `sert_like`, `s4m_like`.
 
 Core modules:
