@@ -53,21 +53,45 @@ Configs:
 ### RL sensor scheduling framework (`rl_sensor_scheduling_framework/`)
 Standalone submodule-style experiment for power-constrained multi-sensor scheduling, state estimation, and downstream forecasting. This framework no longer shares the old `experiments_scheduling_suite/` pipeline; it has its own configs, scripts, reports, and data flow.
 
-Experiment objective:
-- Generate one shared high-frequency truth environment time series.
-- Train/evaluate sensor scheduling policies under instantaneous power, startup-peak, and long-horizon energy constraints.
-- Replay each scheduler on the same truth sequence to produce scheduler-specific estimated state datasets.
-- Train common forecasting models on those scheduler-specific datasets.
-- Compare forecast accuracy retention against the `full_open` oracle baseline under power savings.
+Current research objective:
+- Use reinforcement learning to decide which sensors should be active at each time step under power constraints.
+- Optimize sensor scheduling for **future forecasting quality**, not for instantaneous estimation quality alone.
+- Evaluate the scheduler in a microclimate digital-twin setting where downstream control-relevant variables must remain predictable even when only a subset of sensors can be powered.
+
+Development lineage and branch preservation:
+- Early windblown experiments used a reward dominated by Kalman/state-tracking error, switching cost, and coverage penalty. That route learned a scheduler first and only trained the downstream forecasters afterwards.
+- That older route still matters as a historical working baseline and was preserved explicitly on branch `legacy-state-reward-mainline` at commit `761cdee`.
+- The current mainline changed because the paper objective is downstream forecasting over future horizons. Instantaneous belief-state error was judged misaligned with that objective.
+- The current mainline therefore uses **frozen forecast predictors as reward oracles**: pretrain on a disjoint split, freeze them, and use their future prediction loss as the scheduler training signal.
+- This is still not end-to-end bilevel optimization. The scheduler does not retrain the predictor online.
+
+Current mainline design (Route A, active as of 2026-04-01):
+- Truth data remain high-frequency at `1 Hz`.
+- Shared truth length is now `14 days` (`1209600` steps) so the predictors and RL policies see multiple complete diurnal cycles.
+- The truth sequence is split into four disjoint chronological stages:
+  - `predictor_pretrain`: `423360` steps (`4.9` days)
+  - `rl_train`: `604800` steps (`7.0` days)
+  - `rl_val`: `90720` steps (`1.05` days)
+  - `final_test`: `90720` steps (`1.05` days)
+- Predictor-pretrain and RL-train are intentionally much larger than validation and final test.
+- Route A also adds explicit diurnal phase features (`time_of_day_sin`, `time_of_day_cos`) to both the forecast-predictor input path and the RL state summary.
+
+Current experiment objective in practical terms:
+- Generate one shared truth environment sequence.
+- Pretrain a frozen ensemble of reward predictors on the earliest disjoint split.
+- Train each scheduler on `rl_train`, select/monitor on `rl_val`, and evaluate on `final_test`.
+- Replay each trained scheduler on the same truth sequence to generate scheduler-specific estimated-state datasets.
+- Use frozen-oracle evaluation to compare schedulers against `full_open` on common forecast targets.
+- Interpret results first on the microclimate control-relevant targets, not only on `snow_mass_flux_kg_m2_s`.
 
 Important RL design note:
-- The RL scheduler is still **value-based**, not policy-gradient / actor-critic.
-- Two RL styles now coexist:
+- The main RL backbone is still **value-based**, not actor-critic.
+- Two RL styles coexist:
   - `linear_gaussian`: classic discrete-action DQN over a pre-enumerated `DiscreteActionSpace`.
-  - `windblown`: **subset-conditioned DQN / CMDP-DQN** plus an `OnlineSubsetProjector`; the network evaluates feasible sensor subsets online rather than relying on a static action-id table.
+  - `windblown`: **subset-conditioned DQN / CMDP-DQN** plus an `OnlineSubsetProjector`; the network scores feasible sensor subsets online rather than relying on a static action-id table.
 - Files:
   - `rl_sensor_scheduling_framework/src/scheduling/rl/dqn_agent.py` – legacy discrete-action DQN.
-  - `rl_sensor_scheduling_framework/src/scheduling/rl/score_dqn_agent.py` – windblown subset-conditioned DQN and constrained subset-conditioned DQN.
+  - `rl_sensor_scheduling_framework/src/scheduling/rl/score_dqn_agent.py` – windblown subset-conditioned DQN and CMDP-style subset-conditioned DQN.
   - `rl_sensor_scheduling_framework/src/scheduling/rl/constrained_dqn_agent.py` – CMDP dual-variable layer for the legacy discrete-action DQN.
   - `rl_sensor_scheduling_framework/src/scheduling/rl/sb3_ppo.py` – Stable-Baselines3 PPO baseline wrapped around the windblown online-subset projector.
   - `rl_sensor_scheduling_framework/src/scheduling/rl/q_network.py` – Q-networks, including `SubsetQNetwork` used by the current windblown RL path.
@@ -76,62 +100,75 @@ Important RL design note:
   - `ppo` via Stable-Baselines3; action = continuous per-sensor scores, execution = projector-feasible subset.
 - No A2C / SAC / actor-critic implementation beyond the PPO baseline is currently used.
 
-Current reward design is **Scheme A infrastructure with direct primary-target reward active by default**:
-- RL is not trained end-to-end with downstream predictor retraining.
-- The codebase still contains the frozen auxiliary forecast-reward oracle path (`00b_pretrain_reward_predictor.py`, `src/reward/forecast_reward.py`), but the current default windblown config sets `forecast_reward.enabled: false`.
-- In the current default windblown runs, reward is driven mainly by:
-  - direct primary-target state error (`beta_prediction`)
-  - switch cost
-  - coverage penalty
-- In the current default windblown runs, these terms are effectively disabled or secondary:
-  - estimation uncertainty (`alpha_estimation: 0.0`)
-  - frozen auxiliary forecast reward (`beta_forecast: 0.0`)
-  - direct power penalty in reward (`lambda_power: 0.0`)
-- For `cmdp_dqn`, power is modeled mainly as a constraint rather than as a dominant reward term:
+Current reward design (forecast-oracle mainline):
+- The default windblown mainline now enables `forecast_reward.enabled: true`.
+- The scheduler reward is driven mainly by:
+  - frozen future forecast loss (`lambda_forecast`)
+  - switching cost (`lambda_switch`)
+  - coverage penalty (`lambda_coverage`)
+  - hard-constraint violation penalty (`lambda_violation`)
+- The direct state-tracking term is still present in code for backward compatibility but is disabled in the current mainline (`lambda_state_tracking: 0.0`).
+- For `cmdp_dqn`, power is modeled mainly as a constraint rather than as a reward-maximization target:
   - hard constraints: instantaneous steady-state power, startup peak power, safety margin
   - long-horizon constraints: average power and episode energy via dual variables / cost critic
 - Core files:
+  - `rl_sensor_scheduling_framework/src/reward/mainline_reward.py`
+  - `rl_sensor_scheduling_framework/src/reward/forecast_reward.py`
   - `rl_sensor_scheduling_framework/src/evaluation/cost_metrics.py`
   - `rl_sensor_scheduling_framework/src/evaluation/constraint_metrics.py`
-  - `rl_sensor_scheduling_framework/src/reward/forecast_reward.py`
   - `rl_sensor_scheduling_framework/src/pipelines/truth_pipeline.py`
 
-The frozen forecast-reward oracle is still trained **before** RL on a disjoint `reward_pretrain` split and then frozen during scheduler training / evaluation when enabled. This avoids joint predictor-scheduler bilevel training in the current paper-scale experiment, but note that the experiment driver still launches this pretrain step even when `forecast_reward.enabled: false`.
+Frozen forecast-reward oracle details:
+- The reward oracle is trained **before** RL on the disjoint `predictor_pretrain` split and then frozen during scheduler training and evaluation.
+- The active oracle config is `rl_sensor_scheduling_framework/configs/reward/lstm_aux.yaml`.
+- It currently trains a three-model ensemble:
+  - `tcn_reward`
+  - `lstm_reward`
+  - `transformer_reward`
+- Current oracle settings of note:
+  - `lookback: 20`
+  - `horizon: 3`
+  - `horizon_weights: [1.0, 0.8, 0.6]`
+  - `loss: huber`
+  - `pretrain_schedulers: [full_open, periodic, round_robin, info_priority, random]`
+  - richer pretrain rollouts via constant feasible subsets plus random subset switching
+- The oracle now consumes time indices so the input augmentation path can derive diurnal phase features consistently.
 
 Core scripts:
-- `rl_sensor_scheduling_framework/scripts/00_generate_business_data.py` – Generate the shared high-frequency truth CSV for the business case. Typical output: `rl_sensor_scheduling_framework/data/generated/windblown_truth.csv`.
-- `rl_sensor_scheduling_framework/scripts/00b_pretrain_reward_predictor.py` – Train the frozen auxiliary reward predictor on the `reward_pretrain` split only and save `reward_predictor.pt`.
+- `rl_sensor_scheduling_framework/scripts/00_generate_business_data.py` – Generate the shared high-frequency truth CSV for the business case. Current Route A default uses `truth_steps=1209600`.
+- `rl_sensor_scheduling_framework/scripts/00b_pretrain_reward_predictor.py` – Train the frozen reward-predictor ensemble on the `predictor_pretrain` split only and save the oracle artifacts.
 - `rl_sensor_scheduling_framework/scripts/01_train_rl_scheduler.py` – Train one scheduler on the truth environment. For rule-based schedulers, this computes repeated rollout metrics; for RL schedulers (`dqn`, `cmdp_dqn`, `ppo`), this performs learning and writes the scheduler checkpoint (`.pt` for DQN family, `.zip` for PPO).
-- `rl_sensor_scheduling_framework/scripts/02_evaluate_scheduler.py` – Evaluate one scheduler on the held-out test split of the truth environment and write `metrics_estimation_eval.csv`.
-- `rl_sensor_scheduling_framework/scripts/03_build_forecast_dataset.py` – Replay a trained/evaluated scheduler over the full truth sequence and export one scheduler-specific dataset NPZ containing `input_series` (estimated state), `target_series` (truth targets), `observed_mask`, `event_flags`, `power`, `trace_p`, and `feature_names`.
+- `rl_sensor_scheduling_framework/scripts/02_evaluate_scheduler.py` – Evaluate one scheduler on the held-out truth split and write `metrics_estimation_eval.csv`.
+- `rl_sensor_scheduling_framework/scripts/03_build_forecast_dataset.py` – Replay a trained/evaluated scheduler over the truth sequence and export one scheduler-specific dataset NPZ containing `input_series` (estimated state), `target_series` (truth targets), `observed_mask`, `event_flags`, `power`, `trace_p`, `feature_names`, and now also `time_index`.
 - `rl_sensor_scheduling_framework/scripts/04_train_predictors.py` – Split the scheduler-specific dataset into train/val/test windows, normalize with train statistics, train one predictor, and save `forecast_predictions.npz` + `metrics_forecast.csv`.
-- `rl_sensor_scheduling_framework/scripts/04_train_predictors_multi_gpu.sh` – Parallel predictor launcher. Distributes learned predictor jobs across available GPUs; `naive` stays on CPU.
+- `rl_sensor_scheduling_framework/scripts/04_eval_frozen_predictors.py` – Evaluate the frozen reward-predictor family directly on scheduler datasets using the shared input-preparation path.
+- `rl_sensor_scheduling_framework/scripts/04_eval_frozen_predictors_multi_gpu.sh` – Parallel frozen-predictor launcher; now also supports CPU-only mode when GPUs are occupied by other users.
 - `rl_sensor_scheduling_framework/scripts/05_evaluate_forecasts.py` – Aggregate predictor runs under one `run_tag`, build `metrics_forecast_all_<run_tag>.csv`, and compare every scheduler against `full_open`. Also backfills `sMAPE`, `Pearson`, and `DTW` from saved prediction artifacts when needed.
 - `rl_sensor_scheduling_framework/scripts/06_posthoc_analysis.py` – Produce cross-scheduler heatmaps, rank correlation, Pareto-style power-vs-error plots, and scheduler summary tables.
 - `rl_sensor_scheduling_framework/scripts/07_plot_scheduler_prediction_curves.py` – For a fixed predictor model, draw prediction-vs-truth curves across all schedulers for a chosen target variable and horizon.
 - `rl_sensor_scheduling_framework/scripts/08_plot_sensor_activation_timelines.py` – Plot per-sensor on/off timelines together with target truth and power.
 - `rl_sensor_scheduling_framework/scripts/09_generate_all_plots.py` – Generate the main prediction-curve and sensor-activation figures for either primary-task targets or a specific single target.
 - `rl_sensor_scheduling_framework/scripts/10_posthoc_task_focus.py` – Produce task-focused summaries for the primary target set defined in the environment config.
-- `rl_sensor_scheduling_framework/scripts/run_full_experiment_tmux.sh` – Non-tmux experiment driver despite the historical name. Runs: truth generation -> reward predictor pretrain -> scheduler train/eval -> dataset build -> multi-GPU predictor train -> aggregate eval -> posthoc -> primary-target plots -> target-specific plots.
+- `rl_sensor_scheduling_framework/scripts/run_full_experiment_tmux.sh` – Main experiment driver. Despite the historical name, it is often launched inside tmux manually. Current Route A flow: truth generation -> frozen reward predictor pretrain -> scheduler train/eval -> dataset build -> frozen predictor eval / aggregate eval -> posthoc -> task-focused plots.
 
 Main configs:
-- `rl_sensor_scheduling_framework/configs/base.yaml` – global seed, split ratios, run lengths, reward weights, and sensor budget constraints. Note: for windblown, `configs/env/windblown_case.yaml` is the authoritative source for primary reward / forecast targets; `base.yaml` may still contain stale generic reward-target fields.
+- `rl_sensor_scheduling_framework/configs/base.yaml` – global seed, Route A split ratios, run lengths, reward weights, and sensor budget constraints.
 - `rl_sensor_scheduling_framework/configs/env/windblown_case.yaml` – truth environment settings, state columns, primary reward targets, and forecast targets.
 - `rl_sensor_scheduling_framework/configs/sensors/windblown_sensors.yaml` – sensor definitions, observed variables, and power / startup-peak costs.
 - `rl_sensor_scheduling_framework/configs/estimator/kalman.yaml` – linear Gaussian estimator settings.
-- `rl_sensor_scheduling_framework/configs/reward/lstm_aux.yaml` – frozen auxiliary reward-predictor config used by Scheme A.
+- `rl_sensor_scheduling_framework/configs/reward/lstm_aux.yaml` – frozen reward-predictor ensemble config used by the active mainline.
 - `rl_sensor_scheduling_framework/configs/scheduler/*.yaml` – `full_open`, `random`, `periodic`, `round_robin`, `info_priority`, `dqn`, `cmdp_dqn`, `ppo`.
-- `rl_sensor_scheduling_framework/configs/predictor/*.yaml` – `naive`, `mlp`, `lstm`, `transformer`, `informer`, `tcn`, `pinn`, `sert_like`, `s4m_like`.
+- `rl_sensor_scheduling_framework/configs/predictor/*.yaml` – `naive`, `mlp`, `lstm`, `transformer`, `informer`, `tcn`, `pinn`, `sert_like`, `s4m_like`, plus the `*_reward.yaml` configs used for the frozen oracle.
 
 Core modules:
-- `rl_sensor_scheduling_framework/src/pipelines/truth_pipeline.py` – orchestration logic for scheduler training, evaluation, and dataset building.
-- `rl_sensor_scheduling_framework/src/envs/truth_replay_env.py` – deterministic replay environment over the shared truth CSV, with train/val/test split ranges.
+- `rl_sensor_scheduling_framework/src/pipelines/truth_pipeline.py` – orchestration logic for scheduler training, evaluation, reward-oracle pretraining, and dataset building.
+- `rl_sensor_scheduling_framework/src/envs/truth_replay_env.py` – deterministic replay environment over the shared truth CSV, with split-aware ranges and absolute time indices.
 - `rl_sensor_scheduling_framework/src/sensors/dataset_sensor.py` – sensor wrapper that reads variables from the truth dataset and applies observation noise / availability.
 - `rl_sensor_scheduling_framework/src/estimators/kalman_filter.py` – Kalman estimator used to maintain the belief state and uncertainty summary.
-- `rl_sensor_scheduling_framework/src/estimators/state_summary.py` – flatten belief-state features into the RL state vector.
+- `rl_sensor_scheduling_framework/src/estimators/state_summary.py` – flatten belief-state features into the RL state vector; now includes diurnal phase features when provided.
 - `rl_sensor_scheduling_framework/src/scheduling/online_projector.py` – online feasible-subset selection under hard power constraints.
-- `rl_sensor_scheduling_framework/src/forecasting/input_augmentation.py` – physical feature augmentation of estimator outputs.
-- `rl_sensor_scheduling_framework/src/forecasting/series_preparation.py` – optional missing-aware feature enrichment.
+- `rl_sensor_scheduling_framework/src/forecasting/input_augmentation.py` – physical feature augmentation of estimator outputs, now also handling time-of-day features when time indices are present.
+- `rl_sensor_scheduling_framework/src/forecasting/series_preparation.py` – common preparation of input and target arrays for both predictor training and reward-oracle scoring.
 - `rl_sensor_scheduling_framework/src/forecasting/*.py` – downstream forecasting models trained on scheduler-generated datasets.
 
 Current windblown predictor inputs:
@@ -155,6 +192,8 @@ Current windblown predictor inputs:
   - `particle_kinetic_proxy`
   - `size_velocity_interaction`
   - `transport_exceedance`
+  - `time_of_day_sin`
+  - `time_of_day_cos`
 - Optional missing-aware extras for selected models:
   - `is_observed_*`
   - `delta_*`
@@ -184,6 +223,7 @@ RL state / action / reward in this framework:
   - budget ratio
   - previous action mask
   - event indicator
+  - diurnal phase (`time_of_day_sin`, `time_of_day_cos`)
 - Actions:
   - `linear_gaussian`: discrete feasible subsets from `DiscreteActionSpace`
   - `windblown`: online feasible subsets produced by `OnlineSubsetProjector` from sensor scores / rankings
@@ -191,27 +231,28 @@ RL state / action / reward in this framework:
   - instantaneous steady-state power limit
   - startup / heating peak power limit
   - optional safety margin
-- `dqn` uses `reward = -cost`; in the current default windblown setup this is dominated by direct primary-target state error plus switching and coverage, not by forecast-oracle loss or direct power penalty.
-- `cmdp_dqn` uses the same value-based backbone, but average power / episode energy are handled by CMDP-style dual variables and a separate cost critic rather than direct reward maximization.
+- The current windblown mainline optimizes reward built from future forecast loss plus switching, coverage, and constraint-violation terms.
+- `cmdp_dqn` uses the same value-based backbone, but average power / episode energy are handled by CMDP-style dual variables and a separate cost critic rather than by direct reward maximization.
 
 Data flow:
 1. Truth generation: build one shared high-frequency latent/observed environment CSV.
 2. Reward predictor pretrain:
-   - use `reward_pretrain` split only;
-   - train one frozen auxiliary predictor and save `reward_predictor.pt`;
-   - this step is currently optional in principle, but the main driver still executes it unconditionally.
+   - use `predictor_pretrain` split only;
+   - train the frozen reward-predictor ensemble and save the oracle artifacts;
+   - pretraining uses a mixture of `full_open`, rule-based schedulers, constant feasible subsets, and random subset-switching rollouts.
 3. Scheduler training/eval:
    - rule-based schedulers use greedy rollout metrics;
-   - `windblown` RL schedulers evaluate projector-feasible subsets online with `SubsetQNetwork`;
-   - both stages may load the frozen reward oracle when that path is enabled.
-4. Dataset build: replay each scheduler on the same truth sequence and export one NPZ per scheduler.
-5. Forecast training: each predictor trains on one scheduler NPZ, using the estimated state as input and the configured forecast targets as output.
+   - `windblown` RL schedulers evaluate projector-feasible subsets online with `SubsetQNetwork` or PPO;
+   - the active mainline uses the frozen reward oracle during this stage.
+4. Dataset build: replay each scheduler on the same truth sequence and export one NPZ per scheduler, including the scheduler-specific estimated state and the absolute `time_index`.
+5. Forecast / frozen-oracle evaluation: compare scheduler datasets under a common frozen predictor family, using the same temporal feature preparation path.
 6. Aggregate evaluation: compare all scheduler-predictor combinations against `full_open`.
 7. Posthoc visualization: heatmaps, rank correlation, RMSE/DTW/Pearson tradeoff plots, per-model scheduler curve overlays, sensor activation timelines, and primary-target summaries.
 
 Typical outputs:
 - Truth CSV: `rl_sensor_scheduling_framework/data/generated/*.csv`
 - Scheduler run directories: `rl_sensor_scheduling_framework/reports/runs/<run_tag>_<scheduler>/`
+- Reward model directory: `rl_sensor_scheduling_framework/reports/runs/<run_tag>_reward_model/`
 - Predictor run directories: `rl_sensor_scheduling_framework/reports/runs/<run_tag>_<scheduler>_pred_<model>/`
 - Aggregate tables:
   - `rl_sensor_scheduling_framework/reports/aggregate/metrics_forecast_all_<run_tag>.csv`
@@ -222,19 +263,42 @@ Typical outputs:
   - `rl_sensor_scheduling_framework/reports/aggregate/posthoc_<run_tag>/task_focus_primary/`
 
 Current interpretation caveat:
-- Scheme A is still **not** end-to-end joint optimization of scheduler and downstream forecaster.
+- The current mainline is still **not** end-to-end joint optimization of scheduler and downstream forecaster.
 - The current primary-task interpretation is "microclimate digital twin": results should be read first on the primary target set, not only on `snow_mass_flux_kg_m2_s`.
 - `dRMSE` alone is insufficient; use `RMSE`, `MAE`, `sMAPE`, `Pearson`, and `DTW` together.
 - Aggregate scheduler summaries over the full forecast target set and task-focused summaries over the primary target set are different views; do not conflate them.
 - Scheduler evaluation should always be separated into:
   - estimation-level metrics (`trace_P_mean`, `power_mean`, `coverage_mean`)
   - forecasting-level metrics (`rmse`, `mae`, `smape`, `pearson_h1_mean`, `dtw_h1_mean`, comparison vs `full_open`)
+- The Route A design fixes the earlier failure mode where the frozen predictors saw only a narrow early-time distribution and therefore generalized poorly to later segments.
 
 Known inconsistencies / watchpoints:
-- `rl_sensor_scheduling_framework/configs/base.yaml` still contains generic reward-target fields that may disagree with `rl_sensor_scheduling_framework/configs/env/windblown_case.yaml`; for windblown experiments, the environment config is the authoritative source.
-- `rl_sensor_scheduling_framework/scripts/run_full_experiment_tmux.sh` still launches `00b_pretrain_reward_predictor.py` even when `forecast_reward.enabled: false`; this adds runtime and can confuse result interpretation.
-- The frozen forecast-reward oracle code path remains in active source, but it is currently disabled by default; if re-enabled, it should be revalidated before being treated as a trustworthy training signal.
+- `rl_sensor_scheduling_framework/configs/base.yaml` still contains some generic or historical fields; for windblown experiments, `rl_sensor_scheduling_framework/configs/env/windblown_case.yaml` remains the authoritative source for target definitions.
+- The current truth generator includes diurnal forcing and storm-regime switching, but **does not yet include seasonal forcing**. Multi-month or multi-year data would not be meaningful without extending `src/envs/windblown_env.py` first.
+- The active mainline uses frozen-oracle evaluation rather than retraining final forecasters separately for each scheduler. This is intentional, but it means absolute `full_open` quality is highly sensitive to oracle generalization.
+- As of 2026-04-01, the large Route A GPU run is still in progress / under verification:
+  - tmux session: `routeA_gpu_20260401`
+  - run tag: `routeA_14day_gpu_20260401`
+  - its outputs should be checked before treating Route A forecast quality as final.
 - `solar_radiation_wm2` remains in the latent / observed state even though it was removed from the forecast target set; if it continues to degrade estimator or predictor behavior, it should be either smoothed at generation time or removed from the predictor input path.
+- Some older docs and historical discussion still describe the state-tracking reward route. When in doubt, treat the frozen-forecast Route A configuration as the current mainline and the old route as a preserved baseline branch.
+
+Recovery / backup notes (important if context is lost):
+- Historical state-reward mainline branch:
+  - `legacy-state-reward-mainline` @ `761cdee`
+- Recent nested-repo commits that introduced the current Route A machinery:
+  - `5a5ace1` – frozen-forecast mainline pipeline
+  - `9862b4a` – diurnal-aware Route A data and RL features
+  - `721b425` – docs and regression tests for Route A
+- Backup artifacts created on 2026-04-01:
+  - reports archive: `/home/zhangzhuyu/backups/rl_sensor_scheduling_framework_reports_20260401.tar.zst`
+  - Codex conversation snapshot: `/home/zhangzhuyu/backups/codex_conversations_20260401.tar.zst`
+  - git bundle backup: `/home/zhangzhuyu/backups/rl_sensor_scheduling_framework_20260401.bundle`
+- If the server is interrupted, these files are the fastest recovery path.
+- If future work needs seasonal generalization:
+  - extend `rl_sensor_scheduling_framework/src/envs/windblown_env.py` with seasonality
+  - add `time_of_year` features
+  - likely reduce temporal resolution from `1 Hz` to a coarser step for tractability
 
 ### Other utilities
 - `scripts/evaluate_datasets.py` – Scans CSV datasets for time-series readiness (timestamp inference, dominant freq, missing rates, longest gaps, duplicates).
