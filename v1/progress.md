@@ -257,3 +257,17 @@
 - Added `v1/.gitignore` so generated protocol artifacts and Python bytecode are
   kept out of version control; experiment outputs remain available locally under
   `v1/artifacts/`.
+
+## 2026-05-27 Claim-Suite Push
+- The goal tool still contains the completed seed-41 gate objective and cannot
+  create a second active objective in this thread, so the new execution target is
+  recorded in `v1/task_plan.md`.
+- Minimum claim gate is now explicit: main DAgger policy must beat
+  validation-selected static in at least `4/5` seeds with positive mean final
+  margin; MPC teacher must also beat static in at least `4/5` seeds.
+- Added `v1/scripts/run_claim_suite.py` for multi-seed/preset execution.
+- Added `v1/scripts/aggregate_claim_suite.py` to produce per-run tables,
+  per-policy tables, aggregate summaries, and a machine-readable claim pass/fail
+  assessment.
+- Updated `run_protocol_gate.py` manifests to record seed, optional comparison
+  checkpoint path, and full CLI args for reproducibility.

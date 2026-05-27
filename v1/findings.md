@@ -140,3 +140,14 @@
   margin is small, so this is a viability result, not yet a robust empirical
   claim. It is enough to justify scaling; it is not enough alone for paper
   submission.
+
+## Claim-Suite Requirement
+- The new mainline should be judged only against the strict split-protocol
+  evidence it produces under `v1/`.
+- Minimum paper-usable claim: on the declared final-test split, deployable
+  DAgger-BC beats the validation-selected static comparator in at least `4/5`
+  seeds and has positive mean paired margin. Anything below that remains a
+  viability/prototype result.
+- Required mechanism controls are no-DAgger and oracle-only objective. They
+  test, respectively, whether rollout distribution correction and task-composite
+  objective are necessary for the final claim.

@@ -528,10 +528,14 @@ def main() -> None:
     }
     manifest = {
         "role": "v1_forecast_cmdp_protocol_gate",
+        "seed": int(args.seed),
         "truth_csv": str(truth_path),
         "sensor_cfg": str(resolve_archive_path(args.sensor_cfg)),
         "oracle_path": str(resolve_archive_path(args.oracle_path)) if args.oracle_path else None,
         "oracle_type": str(args.oracle_type),
+        "custom_ppo_checkpoint": str(resolve_archive_path(args.custom_ppo_checkpoint))
+        if args.custom_ppo_checkpoint
+        else None,
         "oracle_target_weight_mode": str(args.oracle_target_weight_mode),
         "oracle_target_weights": oracle_target_weights,
         "objective_mode": str(args.objective_mode),
@@ -575,6 +579,7 @@ def main() -> None:
             "logit_margin": bc_fallback_margin,
             "grid": [float(x) for x in args.bc_logit_margin_grid],
         },
+        "run_args": vars(args),
         "gate_summary": gate_summary,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")

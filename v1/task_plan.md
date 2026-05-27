@@ -8,7 +8,16 @@ PD-PPO failure modes: missing explicit forecast context, weak credit assignment,
 fixed penalty constraint handling, and lack of teacher guidance.
 
 ## Current Phase
-Phase 3b complete; ready for Phase 4/5 scaling decision.
+Phase 5a in progress: multi-seed claim suite implementation and launch.
+
+## Minimum Claim Target
+- In strict chronological split protocol, the deployable forecast-aware DAgger
+  policy must beat the validation-selected static policy on held-out final-test
+  windows in at least `4/5` seeds, with positive mean paired margin.
+- The privileged MPC teacher must also beat the same static comparator in at
+  least `4/5` seeds, establishing that the planning objective has dynamic value.
+- Required ablations for paper use: no-DAgger and oracle-only objective. These
+  must be reported as mechanism controls, not as alternate main methods.
 
 ## Non-Negotiable Boundaries
 - Do not modify `rl_sensor_scheduling_framework` core source for the new method.
@@ -62,10 +71,13 @@ Phase 3b complete; ready for Phase 4/5 scaling decision.
 
 ## Phase 5: Server Experiments and Paper Assets
 - [x] Launch and pass server seed-41 medium gate for corrected v1 method.
-- [ ] Run n=5/n=10 with task-composite objective and DAgger-BC.
+- [x] Implement batch multi-seed claim-suite launcher.
+- [x] Implement claim-suite aggregator and pass/fail assessment.
+- [ ] Run n=5 with task-composite objective and DAgger-BC.
+- [ ] Run required ablations: no-DAgger and oracle-only objective.
 - [ ] Aggregate results and produce behavior diagnostics.
 - [ ] Update manuscript only if strict static comparator is beaten robustly.
-- **Status:** pending
+- **Status:** in_progress
 
 ## Error Log
 | Time | Error | Resolution |
