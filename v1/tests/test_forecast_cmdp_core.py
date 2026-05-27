@@ -20,6 +20,8 @@ from forecast_cmdp.mpc_teacher import (
 from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareCyclePolicy,
+    ForecastAwareKNNPolicy,
     load_bc_policy_checkpoint,
     save_bc_policy_checkpoint,
     train_bc_classifier,
@@ -317,3 +319,67 @@ def test_teacher_dataset_and_bc_policy_smoke(tmp_path):
     loaded_action = loaded.act_mask(env)
     assert loaded_action.shape == (3,)
     assert env.projector.project_mask(loaded_action, env.runtimes).feasible
+    knn_policy = ForecastAwareKNNPolicy(
+        features=combined.features,
+        labels=combined.labels,
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        k=3,
+    )
+    env.reset(start_idx=18)
+    knn_action = knn_policy.act_mask(env)
+    assert knn_action.shape == (3,)
+    assert env.projector.project_mask(knn_action, env.runtimes).feasible
+    cycle_policy = ForecastAwareCyclePolicy(labels=combined.labels, candidate_masks=masks)
+    env.reset(start_idx=18)
+    cycle_action = cycle_policy.act_mask(env)
+    assert cycle_action.shape == (3,)
+    assert env.projector.project_mask(cycle_action, env.runtimes).feasible
+
+
+def test_bc_policy_can_preserve_warming_sensor():
+    import torch
+
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+    met_only_idx = int(np.flatnonzero(np.all(masks == np.asarray([[1, 0, 0]], dtype=bool), axis=1))[0])
+    met_snow_idx = int(np.flatnonzero(np.all(masks == np.asarray([[1, 1, 0]], dtype=bool), axis=1))[0])
+
+    class FixedLogitModel:
+        input_dim = env._state().shape[0] + forecast_cfg.horizon * 2 + 1
+        hidden_dim = 1
+        n_actions = masks.shape[0]
+
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, x):
+            logits = torch.zeros((x.shape[0], masks.shape[0]), dtype=torch.float32, device=x.device)
+            logits[:, met_only_idx] = 10.0
+            logits[:, met_snow_idx] = 1.0
+            return logits
+
+    env.reset(start_idx=18)
+    env.step_mask(np.asarray([True, True, False], dtype=bool))
+    assert str(env.runtimes["snow"].mode.name).lower() == "warming"
+    unguarded = ForecastAwareBCPolicy(
+        model=FixedLogitModel(),
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        device="cpu",
+        preserve_warming=False,
+    )
+    guarded = ForecastAwareBCPolicy(
+        model=FixedLogitModel(),
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        device="cpu",
+        preserve_warming=True,
+    )
+    assert unguarded.act_mask(env).tolist() == [True, False, False]
+    assert guarded.act_mask(env).tolist() == [True, True, False]

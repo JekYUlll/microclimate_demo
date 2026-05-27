@@ -29,6 +29,7 @@ from forecast_cmdp.mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, enumer
 from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareKNNPolicy,
     save_bc_policy_checkpoint,
     train_bc_classifier,
 )
@@ -136,6 +137,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bc-device", default="auto")
     parser.add_argument("--dagger-iters", type=int, default=0)
     parser.add_argument("--dagger-steps", type=int, default=None)
+    parser.add_argument("--bc-preserve-warming", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--knn-k", type=int, default=5)
     parser.add_argument("--bc-fallback-source", choices=["none", "validation_static"], default="none")
     parser.add_argument(
         "--bc-logit-margin-grid",
@@ -366,6 +370,7 @@ def main() -> None:
             candidate_masks=candidate_masks,
             forecast_cfg=forecast_cfg,
             device=str(args.bc_device),
+            preserve_warming=bool(args.bc_preserve_warming),
         )
         dagger_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
         log(f"collecting DAgger dataset iter={dagger_iter + 1}")
@@ -430,8 +435,20 @@ def main() -> None:
             device=str(args.bc_device),
             fallback_mask=selected_static_mask if str(args.bc_fallback_source) == "validation_static" else None,
             min_logit_margin=bc_fallback_margin,
+            preserve_warming=bool(args.bc_preserve_warming),
         ),
     ]
+    if bool(args.include_knn_policy):
+        policies.append(
+            ForecastAwareKNNPolicy(
+                features=teacher_dataset.features,
+                labels=teacher_dataset.labels,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                k=int(args.knn_k),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
     if args.custom_ppo_checkpoint:
         log(f"loading custom PPO checkpoint: {args.custom_ppo_checkpoint}")
         policies.append(
@@ -508,7 +525,7 @@ def main() -> None:
     )
     teacher_rows = metrics_df.loc[metrics_df["policy"] == "mpc_teacher"]
     teacher = teacher_rows.iloc[0] if not teacher_rows.empty else None
-    deployable = metrics_df[metrics_df["policy"].isin(["forecast_aware_bc"])]
+    deployable = metrics_df[metrics_df["policy"].isin(["forecast_aware_bc", "forecast_aware_knn"])]
     best_deployable = deployable.sort_values("objective_loss_mean").iloc[0] if not deployable.empty else None
     gate_summary = {
         "objective_metric": str(args.objective_mode),
@@ -573,6 +590,11 @@ def main() -> None:
             "iters": int(args.dagger_iters),
             "steps": int(args.dagger_steps or args.train_steps),
             "final_samples": int(teacher_dataset.features.shape[0]),
+        },
+        "bc_preserve_warming": bool(args.bc_preserve_warming),
+        "knn_policy": {
+            "included": bool(args.include_knn_policy),
+            "k": int(args.knn_k),
         },
         "bc_fallback": {
             "source": str(args.bc_fallback_source),
@@ -731,6 +753,7 @@ def calibrate_bc_fallback_margin(
             device=str(args.bc_device),
             fallback_mask=fallback_mask,
             min_logit_margin=float(margin),
+            preserve_warming=bool(args.bc_preserve_warming),
             name=f"forecast_aware_bc_calib_{idx}",
         )
         result, _ = evaluate_policy_over_starts(

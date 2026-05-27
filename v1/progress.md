@@ -269,5 +269,28 @@
 - Added `v1/scripts/aggregate_claim_suite.py` to produce per-run tables,
   per-policy tables, aggregate summaries, and a machine-readable claim pass/fail
   assessment.
+- Added `v1/scripts/aggregate_behavior_diagnostics.py` to aggregate final-rollout
+  power, SOC, switching, warm-up aborts, and event/non-event sensor activation
+  rates.
 - Updated `run_protocol_gate.py` manifests to record seed, optional comparison
   checkpoint path, and full CLI args for reproducibility.
+- Synced `v1/` to the GPU server after local tests passed.
+- Launched server tmux `v1_claim_main_n5_20260527` for the main n=5 suite on
+  seeds `41--45`, using GPUs `0--4`, task-composite objective, validation-best
+  anchor, top-k teacher prefilter, and one DAgger iteration.
+- Main n=5 result failed the deployable claim gate: MPC teacher beat static in
+  `5/5` seeds, but DAgger-BC beat static in only `1/5` seeds. Mean deployable
+  margin was negative (`-0.012903`). This localizes the remaining blocker to
+  deployable distillation/runtime action safety, not to the teacher objective.
+- Added a warm-up-preserving deployment guard to `ForecastAwareBCPolicy`: when a
+  sensor is currently warming, candidate selection first restricts to feasible
+  masks that keep that sensor powered, avoiding unnecessary warm-up aborts.
+- Added `main_safe` and `safe_dagger3` claim-suite presets; `safe_dagger3`
+  combines the warm-up preservation guard with three DAgger iterations.
+- `safe_dagger3` also failed the deployable claim gate in early completed
+  results; seed43 worsened, so the issue is not simply DAgger iteration count.
+- Added `ForecastAwareKNNPolicy`, a case-library deployable policy that selects
+  nearest-neighbor teacher actions from the collected train/DAgger state-action
+  dataset under current feasibility and warm-up-preservation constraints.
+- Added `evaluate_existing_knn.py` for posthoc evaluation of the KNN deployment
+  layer on already-completed run directories before spending a full rerun.

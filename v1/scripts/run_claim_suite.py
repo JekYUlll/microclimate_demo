@@ -33,7 +33,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--presets",
         nargs="+",
-        choices=["main", "no_dagger", "oracle_objective", "no_anchor_guard"],
+        choices=[
+            "main",
+            "main_safe",
+            "safe_dagger3",
+            "knn_safe",
+            "knn_safe_dagger3",
+            "no_dagger",
+            "oracle_objective",
+            "no_anchor_guard",
+        ],
         default=["main"],
     )
     parser.add_argument("--sensor-cfg", default="configs/sensors/windblown_sensors_physical_event_v4.yaml")
@@ -205,7 +214,15 @@ def base_command(
     else:
         common.append("--no-include-rule-baselines")
 
-    if preset in {"main", "no_dagger", "no_anchor_guard"}:
+    if preset in {
+        "main",
+        "main_safe",
+        "safe_dagger3",
+        "knn_safe",
+        "knn_safe_dagger3",
+        "no_dagger",
+        "no_anchor_guard",
+    }:
         common.extend(
             [
                 "--objective-mode",
@@ -228,8 +245,20 @@ def base_command(
     else:
         common.append("--anchor-regret-guard")
 
+    if preset in {"main_safe", "safe_dagger3", "knn_safe", "knn_safe_dagger3"}:
+        common.append("--bc-preserve-warming")
+    else:
+        common.append("--no-bc-preserve-warming")
+
+    if preset in {"knn_safe", "knn_safe_dagger3"}:
+        common.extend(["--include-knn-policy", "--knn-k", "7"])
+    else:
+        common.append("--no-include-knn-policy")
+
     if preset == "no_dagger":
         common.extend(["--dagger-iters", "0"])
+    elif preset in {"safe_dagger3", "knn_safe_dagger3"}:
+        common.extend(["--dagger-iters", "3"])
     else:
         common.extend(["--dagger-iters", "1"])
     return common

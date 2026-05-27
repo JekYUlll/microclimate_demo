@@ -62,12 +62,12 @@ Phase 5a in progress: multi-seed claim suite implementation and launch.
 - **Status:** complete for seed-41 gate; pending multi-seed scaling
 
 ## Phase 4: Constraint Learning
-- [ ] Decide whether DAgger-BC is sufficient as the submitted deployable method
+- [x] Decide whether DAgger-BC is sufficient as the submitted deployable method
   or whether to add cost-vector output / dual-variable fine-tuning.
-- [ ] Add reward critic / cost critic training loop only if multi-seed BC is
-  unstable or constraint metrics require it.
+- [ ] Add reward critic / cost critic training loop because multi-seed BC/KNN
+  deployment is unstable despite teacher lift.
 - [ ] Compare constrained fine-tuning against BC-only.
-- **Status:** pending
+- **Status:** in_progress
 
 ## Phase 5: Server Experiments and Paper Assets
 - [x] Launch and pass server seed-41 medium gate for corrected v1 method.
@@ -76,6 +76,8 @@ Phase 5a in progress: multi-seed claim suite implementation and launch.
 - [ ] Run n=5 with task-composite objective and DAgger-BC.
 - [ ] Run required ablations: no-DAgger and oracle-only objective.
 - [ ] Aggregate results and produce behavior diagnostics.
+- [ ] Replace unstable deployable action classification with action-cost/value
+  imitation and rerun n=5.
 - [ ] Update manuscript only if strict static comparator is beaten robustly.
 - **Status:** in_progress
 

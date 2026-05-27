@@ -110,6 +110,59 @@ def beam_search_teacher_action(
         restore_env(env, original)
 
 
+def beam_search_first_action_costs(
+    env: WarmupSchedulingEnv,
+    candidate_masks: np.ndarray,
+    cfg: MpcTeacherConfig | None = None,
+) -> np.ndarray:
+    """Return approximate short-horizon cost for each feasible first action.
+
+    Costs are computed with the same beam-search objective as the teacher, but
+    grouped by the first action of the planned sequence. Non-evaluated or
+    infeasible actions are returned as ``inf``.
+    """
+
+    config = cfg or MpcTeacherConfig()
+    masks = np.asarray(candidate_masks, dtype=bool).reshape(-1, len(env.sensor_ids))
+    original = snapshot_env(env)
+    costs = np.full(masks.shape[0], np.inf, dtype=float)
+    try:
+        start_snapshot = snapshot_env(env)
+        beams: list[tuple[float, int | None, dict[str, object]]] = [(0.0, None, start_snapshot)]
+        depth = max(1, int(config.planning_horizon))
+        for _ in range(depth):
+            expanded: list[tuple[float, int | None, dict[str, object]]] = []
+            for cost_so_far, first_idx, snap in beams:
+                restore_env(env, snap)
+                branches = _rank_one_step_branches_with_indices(env, masks, config)
+                for action_idx, step_cost, _, next_snap in branches[: max(1, int(config.max_branch))]:
+                    expanded.append(
+                        (
+                            float(cost_so_far + step_cost),
+                            int(action_idx) if first_idx is None else int(first_idx),
+                            next_snap,
+                        )
+                    )
+            if not expanded:
+                break
+            expanded.sort(key=lambda item: item[0])
+            for total_cost, first_idx, _ in expanded:
+                if first_idx is not None:
+                    costs[int(first_idx)] = min(float(costs[int(first_idx)]), float(total_cost))
+            beams = expanded[: max(1, int(config.beam_width))]
+        if bool(config.anchor_regret_guard) and config.anchor_mask is not None:
+            restore_env(env, start_snapshot)
+            anchor = _valid_anchor_mask(env, config.anchor_mask)
+            if anchor is not None:
+                anchor_idx = _candidate_index(masks, anchor)
+                if anchor_idx is not None:
+                    anchor_cost = _rollout_repeated_mask_cost(env, anchor, depth, masks, config)
+                    costs[int(anchor_idx)] = min(float(costs[int(anchor_idx)]), float(anchor_cost))
+        return costs
+    finally:
+        restore_env(env, original)
+
+
 @dataclass
 class MpcTeacherPolicy(V2Policy):
     candidate_masks: np.ndarray
@@ -148,6 +201,33 @@ def _rank_one_step_branches(
         rows.append((float(cost), np.asarray(mask, dtype=bool).copy(), snapshot_env(env)))
     restore_env(env, start)
     rows.sort(key=lambda item: item[0])
+    return rows
+
+
+def _rank_one_step_branches_with_indices(
+    env: WarmupSchedulingEnv,
+    candidate_masks: np.ndarray,
+    cfg: MpcTeacherConfig,
+) -> list[tuple[int, float, np.ndarray, dict[str, object]]]:
+    start = snapshot_env(env)
+    rows: list[tuple[int, float, np.ndarray, dict[str, object]]] = []
+    masks = np.asarray(candidate_masks, dtype=bool).reshape(-1, len(env.sensor_ids))
+    branch_masks = _prefilter_candidate_masks(env, masks, cfg)
+    for mask in feasible_masks(env, branch_masks):
+        action_idx = _candidate_index(masks, mask)
+        if action_idx is None:
+            continue
+        restore_env(env, start)
+        step_idx = int(env.current_idx)
+        _, reward, done, info = env.step_mask(mask)
+        del done
+        loss = float(info.get("oracle_loss", np.nan))
+        if not np.isfinite(loss):
+            loss = -float(reward)
+        cost = _step_cost_from_info(env, mask, info, loss, cfg, masks, step_idx=step_idx)
+        rows.append((int(action_idx), float(cost), np.asarray(mask, dtype=bool).copy(), snapshot_env(env)))
+    restore_env(env, start)
+    rows.sort(key=lambda item: item[1])
     return rows
 
 
@@ -251,6 +331,14 @@ def _candidate_prior_cost(cfg: MpcTeacherConfig, candidate_masks: np.ndarray, ma
         return 0.0
     value = float(costs[int(ids[0])])
     return value if np.isfinite(value) else 0.0
+
+
+def _candidate_index(candidate_masks: np.ndarray, mask: np.ndarray) -> int | None:
+    matches = np.all(np.asarray(candidate_masks, dtype=bool) == np.asarray(mask, dtype=bool).reshape(1, -1), axis=1)
+    ids = np.flatnonzero(matches)
+    if ids.size == 0:
+        return None
+    return int(ids[0])
 
 
 def _prefilter_candidate_masks(env: WarmupSchedulingEnv, candidate_masks: np.ndarray, cfg: MpcTeacherConfig) -> np.ndarray:
