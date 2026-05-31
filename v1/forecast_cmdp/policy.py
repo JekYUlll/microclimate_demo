@@ -84,6 +84,123 @@ def train_bc_classifier(
     return model.eval(), history
 
 
+def train_mask_bc(
+    features: np.ndarray,
+    labels: np.ndarray,
+    candidate_masks: np.ndarray,
+    *,
+    cfg: BCTrainingConfig,
+) -> tuple[Any, dict[str, list[float]]]:
+    torch, nn, DataLoader, TensorDataset = _torch_modules()
+    x = np.asarray(features, dtype=np.float32)
+    y_idx = np.asarray(labels, dtype=np.int64).reshape(-1)
+    masks = np.asarray(candidate_masks, dtype=bool)
+    if x.ndim != 2:
+        raise ValueError("features must be 2D")
+    if y_idx.shape[0] != x.shape[0]:
+        raise ValueError("features and labels must have matching rows")
+    if np.any(y_idx < 0) or np.any(y_idx >= masks.shape[0]):
+        raise ValueError("labels contain action indices outside candidate mask width")
+    y = masks[y_idx].astype(np.float32)
+    device = _select_device(torch, str(cfg.device))
+    torch.manual_seed(int(cfg.seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(cfg.seed))
+    model = MaskBCNet(input_dim=x.shape[1], hidden_dim=int(cfg.hidden_dim), n_sensors=int(masks.shape[1])).to(device)
+    pos = np.maximum(np.sum(y, axis=0), 1.0)
+    neg = np.maximum(float(y.shape[0]) - pos, 1.0)
+    pos_weight = np.clip(neg / pos, 0.25, 4.0).astype(np.float32)
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.as_tensor(pos_weight, dtype=torch.float32, device=device))
+    loader = DataLoader(
+        TensorDataset(torch.as_tensor(x, dtype=torch.float32), torch.as_tensor(y, dtype=torch.float32)),
+        batch_size=max(1, int(cfg.batch_size)),
+        shuffle=True,
+        drop_last=False,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg.learning_rate), weight_decay=float(cfg.weight_decay))
+    history = {"loss": [], "sensor_accuracy": [], "exact_match": []}
+    for _ in range(int(cfg.epochs)):
+        losses: list[float] = []
+        sensor_hits = 0
+        sensor_total = 0
+        exact_hits = 0
+        rows = 0
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            logits = model(xb)
+            loss = loss_fn(logits, yb)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            losses.append(float(loss.detach().cpu().item()))
+            pred = logits.detach() >= 0.0
+            target = yb.detach() >= 0.5
+            sensor_hits += int((pred == target).sum().cpu().item())
+            sensor_total += int(target.numel())
+            exact_hits += int(torch.all(pred == target, dim=1).sum().cpu().item())
+            rows += int(target.shape[0])
+        history["loss"].append(float(np.mean(losses)) if losses else float("nan"))
+        history["sensor_accuracy"].append(float(sensor_hits) / max(sensor_total, 1))
+        history["exact_match"].append(float(exact_hits) / max(rows, 1))
+    return model.eval(), history
+
+
+def train_deviation_gate(
+    features: np.ndarray,
+    labels: np.ndarray,
+    *,
+    anchor_idx: int,
+    cfg: BCTrainingConfig,
+) -> tuple[Any, dict[str, list[float]]]:
+    torch, nn, DataLoader, TensorDataset = _torch_modules()
+    x = np.asarray(features, dtype=np.float32)
+    y_idx = np.asarray(labels, dtype=np.int64).reshape(-1)
+    if x.ndim != 2:
+        raise ValueError("features must be 2D")
+    if y_idx.shape[0] != x.shape[0]:
+        raise ValueError("features and labels must have matching rows")
+    y = (y_idx != int(anchor_idx)).astype(np.float32).reshape(-1, 1)
+    device = _select_device(torch, str(cfg.device))
+    torch.manual_seed(int(cfg.seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(cfg.seed))
+    model = DeviationGateNet(input_dim=x.shape[1], hidden_dim=int(cfg.hidden_dim)).to(device)
+    pos = max(float(np.sum(y)), 1.0)
+    neg = max(float(y.shape[0]) - pos, 1.0)
+    pos_weight = float(np.clip(neg / pos, 0.25, 8.0))
+    loss_fn = nn.BCEWithLogitsLoss(pos_weight=torch.as_tensor([pos_weight], dtype=torch.float32, device=device))
+    loader = DataLoader(
+        TensorDataset(torch.as_tensor(x, dtype=torch.float32), torch.as_tensor(y, dtype=torch.float32)),
+        batch_size=max(1, int(cfg.batch_size)),
+        shuffle=True,
+        drop_last=False,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg.learning_rate), weight_decay=float(cfg.weight_decay))
+    history = {"loss": [], "accuracy": [], "positive_rate": [float(np.mean(y))]}
+    for _ in range(int(cfg.epochs)):
+        losses: list[float] = []
+        hits = 0
+        rows = 0
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            logits = model(xb)
+            loss = loss_fn(logits, yb)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            losses.append(float(loss.detach().cpu().item()))
+            pred = torch.sigmoid(logits.detach()) >= 0.5
+            hits += int((pred == (yb.detach() >= 0.5)).sum().cpu().item())
+            rows += int(yb.numel())
+        history["loss"].append(float(np.mean(losses)) if losses else float("nan"))
+        history["accuracy"].append(float(hits) / max(rows, 1))
+    return model.eval(), history
+
+
 def save_bc_policy_checkpoint(
     path: str | Path,
     *,
@@ -152,6 +269,53 @@ class MaskedBCNet:
         return _MaskedBCNet()
 
 
+class MaskBCNet:
+    def __new__(cls, *, input_dim: int, hidden_dim: int, n_sensors: int) -> Any:
+        _, nn, _, _ = _torch_modules()
+
+        class _MaskBCNet(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.input_dim = int(input_dim)
+                self.hidden_dim = int(hidden_dim)
+                self.n_sensors = int(n_sensors)
+                self.net = nn.Sequential(
+                    nn.Linear(int(input_dim), int(hidden_dim)),
+                    nn.Tanh(),
+                    nn.Linear(int(hidden_dim), int(hidden_dim)),
+                    nn.Tanh(),
+                    nn.Linear(int(hidden_dim), int(n_sensors)),
+                )
+
+            def forward(self, x: Any) -> Any:
+                return self.net(x)
+
+        return _MaskBCNet()
+
+
+class DeviationGateNet:
+    def __new__(cls, *, input_dim: int, hidden_dim: int) -> Any:
+        _, nn, _, _ = _torch_modules()
+
+        class _DeviationGateNet(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.input_dim = int(input_dim)
+                self.hidden_dim = int(hidden_dim)
+                self.net = nn.Sequential(
+                    nn.Linear(int(input_dim), int(hidden_dim)),
+                    nn.Tanh(),
+                    nn.Linear(int(hidden_dim), int(hidden_dim)),
+                    nn.Tanh(),
+                    nn.Linear(int(hidden_dim), 1),
+                )
+
+            def forward(self, x: Any) -> Any:
+                return self.net(x)
+
+        return _DeviationGateNet()
+
+
 @dataclass
 class ForecastAwareBCPolicy(V2Policy):
     model: Any
@@ -159,6 +323,7 @@ class ForecastAwareBCPolicy(V2Policy):
     forecast_cfg: ForecastContextConfig
     device: str = "auto"
     fallback_mask: tuple[bool, ...] | np.ndarray | None = None
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
     min_confidence: float = 0.0
     min_logit_margin: float | None = None
     preserve_warming: bool = False
@@ -172,6 +337,7 @@ class ForecastAwareBCPolicy(V2Policy):
         self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
         if self.fallback_mask is not None:
             self.fallback_mask = tuple(bool(x) for x in np.asarray(self.fallback_mask, dtype=bool).reshape(-1))
+        self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
 
     def reset(self) -> None:
         pass
@@ -182,7 +348,7 @@ class ForecastAwareBCPolicy(V2Policy):
         forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
         feature = append_event_forecast(state, forecast)
         valid = feasible_candidate_mask(env, self.candidate_masks)
-        valid_for_selection = self._apply_warming_preservation(env, valid)
+        valid_for_selection = self._apply_warming_preservation(env, self._apply_allowed_actions(valid))
         with torch.no_grad():
             x = torch.as_tensor(feature.reshape(1, -1), dtype=torch.float32, device=self.device_obj)
             logits = self.model(x)
@@ -227,6 +393,141 @@ class ForecastAwareBCPolicy(V2Policy):
         if np.any(guarded):
             return guarded
         return np.asarray(valid, dtype=bool)
+
+    def _apply_allowed_actions(self, valid: np.ndarray) -> np.ndarray:
+        allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
+        if np.any(allowed):
+            return allowed
+        return np.asarray(valid, dtype=bool)
+
+
+@dataclass
+class ForecastAwareResidualBCPolicy(V2Policy):
+    bc_model: Any
+    gate_model: Any
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    anchor_mask: tuple[bool, ...] | np.ndarray
+    device: str = "auto"
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
+    deviate_threshold: float = 0.5
+    preserve_warming: bool = True
+    name: str = "forecast_aware_residual_bc"
+
+    def __post_init__(self) -> None:
+        torch, _, _, _ = _torch_modules()
+        self.device_obj = _select_device(torch, str(self.device))
+        self.bc_model.to(self.device_obj)
+        self.gate_model.to(self.device_obj)
+        self.bc_model.eval()
+        self.gate_model.eval()
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
+        self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        state = env._state().astype(np.float32)
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        feature = append_event_forecast(state, forecast)
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        valid_for_selection = self._apply_warming_preservation(env, self._apply_allowed_actions(valid))
+        anchor_valid = self.anchor_idx is not None and bool(valid[int(self.anchor_idx)])
+        with torch.no_grad():
+            x = torch.as_tensor(feature.reshape(1, -1), dtype=torch.float32, device=self.device_obj)
+            deviate_prob = float(torch.sigmoid(self.gate_model(x)).reshape(-1)[0].detach().cpu().item())
+            if anchor_valid and deviate_prob < float(self.deviate_threshold):
+                return self.anchor_mask_arr.astype(bool).copy()
+            logits = self.bc_model(x)
+            mask_t = torch.as_tensor(valid_for_selection.reshape(1, -1), dtype=torch.bool, device=self.device_obj)
+            logits = logits.masked_fill(~mask_t, -1.0e9)
+            action = int(torch.argmax(logits, dim=1).detach().cpu().item())
+        if anchor_valid and not bool(valid_for_selection[int(action)]):
+            return self.anchor_mask_arr.astype(bool).copy()
+        return self.candidate_masks[action].astype(bool).copy()
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _apply_warming_preservation(self, env: WarmupSchedulingEnv, valid: np.ndarray) -> np.ndarray:
+        if not bool(self.preserve_warming):
+            return np.asarray(valid, dtype=bool)
+        required = np.asarray(
+            [
+                str(env.runtimes[sid].mode.name).lower() == "warming" and int(env.runtimes[sid].warm_remaining) > 0
+                for sid in env.sensor_ids
+            ],
+            dtype=bool,
+        )
+        if not np.any(required):
+            return np.asarray(valid, dtype=bool)
+        keep_warming = np.all(self.candidate_masks[:, required], axis=1)
+        guarded = np.asarray(valid, dtype=bool) & keep_warming
+        if np.any(guarded):
+            return guarded
+        return np.asarray(valid, dtype=bool)
+
+    def _apply_allowed_actions(self, valid: np.ndarray) -> np.ndarray:
+        allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
+        if np.any(allowed):
+            return allowed
+        return np.asarray(valid, dtype=bool)
+
+
+@dataclass
+class ForecastAwareMaskBCPolicy(V2Policy):
+    model: Any
+    forecast_cfg: ForecastContextConfig
+    device: str = "auto"
+    preserve_warming: bool = True
+    required_sensor_indices: tuple[int, ...] | np.ndarray | None = None
+    anchor_mask: tuple[bool, ...] | np.ndarray | None = None
+    anchor_bias: float = 0.0
+    name: str = "forecast_aware_mask_bc"
+
+    def __post_init__(self) -> None:
+        torch, _, _, _ = _torch_modules()
+        self.device_obj = _select_device(torch, str(self.device))
+        self.model.to(self.device_obj)
+        self.model.eval()
+        raw_required = () if self.required_sensor_indices is None else self.required_sensor_indices
+        self.required_sensor_indices = tuple(int(x) for x in np.asarray(raw_required, dtype=int).reshape(-1))
+        self.anchor_mask_arr = (
+            np.asarray(self.anchor_mask, dtype=bool).reshape(-1) if self.anchor_mask is not None else None
+        )
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        scores = self.act_scores(env)
+        projected = env.projector.project_scores(scores, env.runtimes)
+        return np.asarray(projected.selected_mask, dtype=bool).copy()
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        state = env._state().astype(np.float32)
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        feature = append_event_forecast(state, forecast)
+        with torch.no_grad():
+            x = torch.as_tensor(feature.reshape(1, -1), dtype=torch.float32, device=self.device_obj)
+            scores = self.model(x).reshape(-1).detach().cpu().numpy().astype(float)
+        if self.anchor_mask_arr is not None and self.anchor_mask_arr.shape[0] == scores.shape[0]:
+            scores = scores + float(self.anchor_bias) * np.where(self.anchor_mask_arr, 1.0, -1.0)
+        for idx in self.required_sensor_indices:
+            if 0 <= int(idx) < scores.shape[0]:
+                scores[int(idx)] = max(float(scores[int(idx)]), 1.0e6)
+        if bool(self.preserve_warming):
+            for idx, sid in enumerate(env.sensor_ids):
+                runtime = env.runtimes[sid]
+                if str(runtime.mode.name).lower() == "warming" and int(runtime.warm_remaining) > 0:
+                    scores[int(idx)] = max(float(scores[int(idx)]), 1.0e5)
+        return scores
 
 
 @dataclass
@@ -386,3 +687,17 @@ def _candidate_index(candidates: np.ndarray, mask: np.ndarray) -> int | None:
     if ids.size == 0:
         return None
     return int(ids[0])
+
+
+def _allowed_action_mask(indices: tuple[int, ...] | np.ndarray | None, n_actions: int) -> np.ndarray:
+    mask = np.ones(int(n_actions), dtype=bool)
+    if indices is None:
+        return mask
+    mask[:] = False
+    values = np.asarray(indices, dtype=int).reshape(-1)
+    values = values[(values >= 0) & (values < int(n_actions))]
+    if values.size == 0:
+        mask[:] = True
+    else:
+        mask[values] = True
+    return mask

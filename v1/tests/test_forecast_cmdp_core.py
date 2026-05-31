@@ -10,6 +10,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "v1"))
 
 from forecast_cmdp.features import ForecastContextConfig, build_event_forecast, sensor_timing_features
+from forecast_cmdp.cost_policy import (
+    ActionCostTrainingConfig,
+    ForecastAwareCostPolicy,
+    collect_action_cost_dataset,
+    train_action_cost_model,
+)
 from forecast_cmdp.dataset import collect_dagger_dataset, collect_teacher_dataset, concat_teacher_datasets
 from forecast_cmdp.mpc_teacher import (
     MpcTeacherConfig,
@@ -22,9 +28,11 @@ from forecast_cmdp.policy import (
     ForecastAwareBCPolicy,
     ForecastAwareCyclePolicy,
     ForecastAwareKNNPolicy,
+    ForecastAwareMaskBCPolicy,
     load_bc_policy_checkpoint,
     save_bc_policy_checkpoint,
     train_bc_classifier,
+    train_mask_bc,
 )
 from forecast_cmdp.protocol import task_focus_metrics
 from forecast_cmdp.reuse import ensure_archive_src
@@ -335,6 +343,24 @@ def test_teacher_dataset_and_bc_policy_smoke(tmp_path):
     cycle_action = cycle_policy.act_mask(env)
     assert cycle_action.shape == (3,)
     assert env.projector.project_mask(cycle_action, env.runtimes).feasible
+    mask_model, mask_history = train_mask_bc(
+        dataset.features,
+        dataset.labels,
+        dataset.candidate_masks,
+        cfg=BCTrainingConfig(epochs=2, batch_size=3, hidden_dim=16, device="cpu"),
+    )
+    assert len(mask_history["loss"]) == 2
+    mask_policy = ForecastAwareMaskBCPolicy(
+        model=mask_model,
+        forecast_cfg=forecast_cfg,
+        device="cpu",
+        required_sensor_indices=(0,),
+    )
+    env.reset(start_idx=18)
+    mask_action = mask_policy.act_mask(env)
+    assert mask_action.shape == (3,)
+    assert mask_action[0]
+    assert env.projector.project_mask(mask_action, env.runtimes).feasible
 
 
 def test_bc_policy_can_preserve_warming_sensor():
@@ -383,3 +409,65 @@ def test_bc_policy_can_preserve_warming_sensor():
     )
     assert unguarded.act_mask(env).tolist() == [True, False, False]
     assert guarded.act_mask(env).tolist() == [True, True, False]
+    support_guarded = ForecastAwareBCPolicy(
+        model=FixedLogitModel(),
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        device="cpu",
+        preserve_warming=False,
+        allowed_action_indices=(met_snow_idx,),
+    )
+    assert support_guarded.act_mask(env).tolist() == [True, True, False]
+
+
+def test_action_cost_policy_smoke():
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    teacher_cfg = MpcTeacherConfig(planning_horizon=1, beam_width=2, max_branch=4)
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+    dataset = collect_action_cost_dataset(
+        env,
+        masks,
+        start_indices=(18,),
+        steps_per_start=3,
+        teacher_cfg=teacher_cfg,
+        forecast_cfg=forecast_cfg,
+    )
+    assert dataset.inputs.shape[0] > 0
+    model, history = train_action_cost_model(
+        dataset,
+        ActionCostTrainingConfig(epochs=2, batch_size=8, hidden_dim=16, device="cpu"),
+    )
+    assert len(history["loss"]) == 2
+    policy = ForecastAwareCostPolicy(model=model, candidate_masks=masks, forecast_cfg=forecast_cfg, device="cpu")
+    env.reset(start_idx=18)
+    action = policy.act_mask(env)
+    assert action.shape == (3,)
+    assert env.projector.project_mask(action, env.runtimes).feasible
+
+    import torch
+
+    met_snow_idx = int(np.flatnonzero(np.all(masks == np.asarray([[1, 1, 0]], dtype=bool), axis=1))[0])
+
+    class FixedCostModel:
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, x):
+            # Prefer actions without the snow sensor unless the support guard
+            # removes them from the runtime candidate set.
+            return x[:, -2:-1].clone()
+
+    guarded_policy = ForecastAwareCostPolicy(
+        model=FixedCostModel(),
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        device="cpu",
+        allowed_action_indices=(met_snow_idx,),
+    )
+    env.reset(start_idx=18)
+    assert guarded_policy.act_mask(env).tolist() == [True, True, False]

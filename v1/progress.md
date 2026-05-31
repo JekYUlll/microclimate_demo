@@ -218,6 +218,94 @@
   `1.241163`), but BC still narrowly failed (`1.247130`). BC matched teacher
   action distribution closely and reached train accuracy `0.992188`, so the
   remaining issue is rollout-distribution/sequence timing, not label fitting.
+
+## 2026-05-31 Continuation
+- Restored the `planning-with-files` and `microclimate-experiment-server`
+  contexts after compaction.
+- Confirmed the active server experiment
+  `v1_claim_support_small_n5_20260531` is still running. It has started the
+  first five jobs (`support1_safe` seeds 41-45) and has not yet written any
+  `gate_summary.json` files.
+- Observed severe CPU thread oversubscription: five `run_protocol_gate.py`
+  processes each consumed roughly 43 CPU cores, with server load above 500.
+  This does not invalidate the experiment but slows throughput.
+- Added BLAS/OpenMP thread caps to `v1/scripts/run_claim_suite.py` and
+  `v1/scripts/run_protocol_gate.py` for future launches. The already-running
+  first batch cannot inherit these caps; after it finishes, the remaining grid
+  should be relaunched from the patched code with `--skip-existing`.
+- The first unbounded batch still had no progress beyond static-prior
+  computation after roughly 10 minutes, so it was terminated and the same tmux
+  session was relaunched from the patched code. New `run_protocol_gate.py`
+  workers consume about one CPU core each instead of roughly 43, and server
+  load started to decay.
+- `support1_safe` completed on seeds 41--45. Formal aggregation failed the
+  deployable claim: teacher wins `5/5`, deployable wins `2/5`, mean deployable
+  margin `-0.000151`. This preset is too narrow; in several seeds it allows
+  only the validation-static action, so it can at best tie the comparator.
+- `support2_safe` completed on seeds 41--45. Formal aggregation also failed:
+  teacher wins `5/5`, deployable wins `2/5`, mean deployable margin
+  `+0.000654`. The positive mean is driven by seed41/42, while seeds 43--45
+  still lose; this is not paper-usable under the strict 4/5 criterion.
+- `support3_safe` completed on seeds 41--45 and failed: teacher wins `5/5`,
+  deployable wins `2/5`, mean deployable margin `-0.004729`. Fixed top-k
+  action support is not trending toward the required 4/5 result.
+- `support4_safe` completed on seeds 41--45 and failed: teacher wins `5/5`,
+  deployable wins `2/5`, mean deployable margin `-0.004671`. Seeds 43--45
+  remain the failure block.
+- `support5_safe` completed on seeds 41--45 and failed: teacher wins `5/5`,
+  deployable wins `2/5`, mean deployable margin `-0.008302`. The complete
+  `support1_safe`--`support5_safe` grid failed every preset at `2/5` wins.
+- Synced the aggregate directory from the server. `claim_summary.csv` shows
+  teacher wins `5/5` for every support preset and deployable wins `2/5` for
+  every support preset. Behavior diagnostics show BC reduces power relative to
+  static as support widens, but introduces much higher switching and still
+  misses the teacher's temporal deviation pattern.
+- Implemented `residual_safe`: a deployable residual BC policy that defaults to
+  the validation-selected static anchor and only calls BC when a learned
+  deviation gate predicts that the teacher would leave the anchor. The
+  deviation threshold is calibrated on the validation split; final-test remains
+  held out.
+- Local validation after the residual implementation: `py_compile` passed and
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reported `10 passed`.
+- Synced the residual implementation to the server; remote `py_compile` and
+  pytest also passed (`10 passed`).
+- Launched server tmux `v1_claim_residual_n5_20260531` with preset
+  `residual_safe`, seeds `41--45`, max parallel `5`, no rule baselines. Output:
+  `v1/artifacts/claim_suite_semimarkov_n5_residual`.
+- `residual_safe` completed and failed: teacher wins `5/5`, deployable wins
+  `1/5`, mean deployable margin `-0.011802`. The residual gate improved only
+  seed41 and worsened the difficult seed block. This rules out simple
+  validation-thresholded anchor deviation as the deployable repair.
+- Added diagnostic `oracle_context_safe`, which sets `forecast_truth_future`
+  for the BC feature path and restricts BC to top-5 teacher-label support. This
+  is explicitly privileged and not a deployable claim; it tests whether the
+  current BC/policy head can work if given correct future event context.
+- Launched server tmux `v1_claim_oracle_context_n5_20260531` with preset
+  `oracle_context_safe`, seeds `41--45`, max parallel `5`. Output:
+  `v1/artifacts/claim_suite_semimarkov_n5_oracle_context`.
+- `oracle_context_safe` completed and failed: teacher wins `5/5`, diagnostic
+  BC wins `1/5`, mean margin `-0.007984`. Even privileged future-event context
+  does not make the current BC action-classification deployable layer reliable.
+
+## 2026-05-31 Value-Residual Repair
+- Implemented `ForecastAwareValueResidualPolicy`, a deployable action-cost
+  policy that defaults to the validation-selected static anchor and deviates
+  only when the learned short-horizon cost model predicts an advantage over the
+  anchor above a validation-calibrated threshold.
+- Added `--include-value-residual-policy`, `--value-residual-support-top-k`,
+  and `--value-residual-advantage-grid` to `run_protocol_gate.py`.
+- Added the `value_residual_safe` preset to `run_claim_suite.py`. It excludes
+  ordinary BC from final deployable selection and uses the cost model only for
+  residual value-based deviations.
+- Local validation passed: `py_compile` over `v1/forecast_cmdp` and
+  `v1/scripts`, dry-run CLI check, and
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  -> `10 passed`.
+- Synced the code to the server and launched tmux
+  `v1_claim_value_residual_n5_20260531` for `value_residual_safe` seeds
+  `41--45`. Output:
+  `v1/artifacts/claim_suite_semimarkov_n5_value_residual`.
 - Added one-iteration DAgger support: roll out the current BC on train starts,
   label the visited states with the MPC teacher, merge with the original
   teacher dataset, and retrain BC.
@@ -294,3 +382,144 @@
   dataset under current feasibility and warm-up-preservation constraints.
 - Added `evaluate_existing_knn.py` for posthoc evaluation of the KNN deployment
   layer on already-completed run directories before spending a full rerun.
+- Posthoc KNN and cycle policies also failed on the completed n=5 suite; the
+  deployable layer needs action-value/cost imitation rather than label lookup.
+- Added `beam_search_first_action_costs`, `ActionCostDataset`,
+  `ForecastAwareCostPolicy`, and the `cost_safe` suite preset. This trains a
+  deployable action-cost model from teacher short-horizon costs and chooses the
+  feasible action with minimum predicted cost at runtime.
+- `cost_safe` completed on seeds 41--45. Formal aggregation with
+  `--main-preset cost_safe` failed the deployable claim: deployable wins
+  `2/5`, mean margin `-0.014865`; teacher wins remained `5/5`.
+- Diagnosed the cost-policy failure: unrestricted runtime minimization selected
+  OOD feasible masks, often without `met_station_core`, and drove oracle loss to
+  the saturation ceiling. Added action-support guards to BC and cost policies so
+  deployment can be restricted to high-frequency teacher-label actions plus the
+  static anchor.
+- Added `support4_safe`, `support6_safe`, `support8_safe`, `support12_safe`, and
+  `cost_support6_safe` claim-suite presets.
+- Local verification after the action-support patch:
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  -> `10 passed`; `py_compile` over `v1/forecast_cmdp`, `v1/scripts`, and tests
+  passed.
+- Added posthoc BC-support evaluation to `evaluate_existing_knn.py` so completed
+  BC checkpoints can be rescored under support guards without retraining.
+- Added validation-calibrated support selection (`--bc-action-support-grid`) and
+  the `support_calib_safe` preset. This selects the support top-k on validation
+  rather than picking a top-k from final-test outcomes.
+- Local verification after support calibration changes:
+  `py_compile` passed and `pytest` still reports `10 passed`.
+- Attempted to posthoc-rescore a local early seed-41 artifact, but that manifest
+  predates `run_args` recording. Added an explicit error message; current n=5
+  claim-suite artifacts have the required manifest fields.
+- Added sensor-level multi-label BC as an additional deployable layer:
+  `train_mask_bc` and `ForecastAwareMaskBCPolicy`. It predicts per-sensor scores
+  and delegates feasibility to the archived power projector, avoiding brittle
+  action-id generalization over 163 unrelated mask classes.
+- Added `mask_safe` and `mask_anchor_safe` presets. Local `py_compile` and
+  `pytest` still pass (`10 passed`).
+- Local CPU probe on seed41: `support_calib_safe` completed but failed the
+  static gate (`forecast_aware_bc=1.243436` vs static `1.236492`, teacher
+  `1.193452`). This means validation-calibrated label support alone is not a
+  sufficient deployable fix.
+- Local CPU probe on seed41: `mask_safe` completed and nearly tied the strict
+  static comparator (`forecast_aware_mask_bc=1.236508` vs static `1.236492`,
+  teacher `1.193452`). This is a much better deployable layer than action-id BC
+  on this seed, but still not a pass.
+- Local CPU probe on seed41: `mask_anchor_safe` passed with
+  `forecast_aware_mask_bc=1.235299` vs static `1.236492`, margin `+0.001192`;
+  teacher remained strong at `1.193452`. This becomes the next main server n=5
+  candidate once the GPU server is reachable again.
+- Added `--include-bc-policy/--no-include-bc-policy`; `mask_safe` and
+  `mask_anchor_safe` now exclude ordinary action-id BC from final evaluation so
+  the preset is not final-test cherry-picking between deployable heads. Local
+  compile and tests still pass.
+- Because the GPU server became unreachable while VPN remained connected and
+  the VPN gateway was reachable, launched a local CPU fallback n=5 run for
+  `mask_anchor_safe` in tmux `v1_local_mask_anchor_n5_20260527` with
+  `max_parallel=2`. This is slower than the server but uses the same local
+  seed41--45 truth/oracle inputs.
+- Early local n=5 results: `mask_anchor_safe` passed seed41 but failed seed42.
+  Added validation-selected deployable-head selection and a `hybrid_val_safe`
+  preset that trains both action-id BC and mask-anchor BC, selects the head on
+  validation, and evaluates only that selected deployable head on final.
+- Local n=5 `mask_anchor_safe` is no longer claim-viable: seed41 passed, but
+  seed42 and seed43 failed. The remaining seed44/45 results are diagnostic only;
+  the next claim candidate is `hybrid_val_safe`.
+- Stopped the remaining `mask_anchor_safe` local run after seed44 also failed
+  (`1/4` at that point), then launched local CPU `hybrid_val_safe` n=5 in tmux
+  `v1_local_hybrid_val_n5_20260527`.
+- Stopped `hybrid_val_safe` after seed41 and seed42 both failed. Validation
+  deployable-head selection was not reliable: seed41 selected ordinary BC
+  despite mask-anchor being better on final, and seed42 selected mask-anchor
+  despite ordinary BC historically being better.
+- Local seed41 `cost_support6_safe` also failed. The support guard prevented the
+  catastrophic oracle-loss saturation seen in unrestricted cost policy, but the
+  cost head still did not beat static (`forecast_aware_cost=1.262894`, best
+  deployable BC `1.241125`, static `1.236492`).
+
+## 2026-05-31 Server Recovery
+- User reported that the GPU server recovered with new IP `223.111.157.214`.
+- Updated `/home/horeb/.hermes/skills/microclimate-experiment-server/SKILL.md`
+  by replacing the old `192.168.10.47` IP with `223.111.157.214`.
+- Verified server connectivity, project path, conda `darts`, Python 3.12.12,
+  and 6 idle RTX 4090 GPUs.
+- Synced current `v1/` source to the server and verified remote
+  `py_compile` plus `pytest` (`10 passed`).
+- Added `support1_safe`, `support2_safe`, `support3_safe`, and `support5_safe`
+  presets because local posthoc showed small support sets are the only
+  support-guard variants with promise.
+- Launched server tmux `v1_claim_support_small_n5_20260531`:
+  presets `support1_safe`--`support5_safe`, seeds `41--45`, max parallel `5`,
+  no rule baselines.
+- 2026-05-31 23:37 CST: continued active server monitoring for
+  `v1_claim_value_residual_n5_20260531`. The run is alive with five
+  `run_protocol_gate.py` processes and no `gate_summary.json` files yet. All
+  seed logs have completed train-split static prior selection and are spending
+  time in validation static candidate selection. This is expected CPU-bound
+  candidate replay work rather than a crash.
+- 2026-05-31 23:55 CST: `value_residual_safe` n=5 completed on the GPU server.
+  Formal aggregation passed the minimum claim gate:
+  `claim_pass=true`, deployable wins `4/5`, deployable mean paired margin
+  `+0.002213`, teacher wins `5/5`, teacher mean margin `+0.030599`.
+  Synced aggregate files locally under
+  `v1/artifacts/claim_suite_semimarkov_n5_value_residual/aggregate/`.
+  The single deployable failure was seed44 (`-0.001840` margin); all constraints
+  showed zero warmup abort and zero steady/peak violation in the final policy
+  metrics.
+- Added value-residual-specific ablation presets:
+  `value_residual_no_dagger` and `value_residual_oracle_objective`. The old
+  generic `no_dagger` / `oracle_objective` presets target the previous BC
+  deployable head and are not valid controls for the current passing method.
+  Verified locally with `py_compile`, dry-run, and
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  (`10 passed`).
+- Synced updated `v1/` source to the GPU server and launched tmux
+  `v1_claim_value_residual_ablate_n5_20260531`:
+  presets `value_residual_no_dagger` and `value_residual_oracle_objective`,
+  seeds `41--45`, max parallel `5`, no rule baselines. Output root:
+  `v1/artifacts/claim_suite_semimarkov_n5_value_residual_ablate`.
+- 2026-06-01 00:05 CST: first ablation status check shows `0/10`
+  summaries. The five `value_residual_no_dagger` jobs are alive and have
+  reached validation static candidate selection. This matches the main-suite
+  runtime profile and does not indicate failure.
+- 2026-06-01 00:19 CST: `value_residual_no_dagger` completed for all five
+  seeds. It produced the same gate pattern as `value_residual_safe`: wins on
+  seeds 41, 42, 43, and 45, failure on seed44. The second ablation batch
+  (`value_residual_oracle_objective`) has started and is in train-split static
+  candidate prior computation. Interim interpretation: DAgger is not the active
+  mechanism for the current value-residual method; action-cost/value residual
+  selection is.
+- 2026-06-01 00:43 CST: `value_residual_oracle_objective` completed and the
+  ablation suite was aggregated. Results:
+  `value_residual_no_dagger` = deployable `4/5`, mean margin `+0.002213`,
+  teacher `5/5`; `value_residual_oracle_objective` = deployable `2/5`, mean
+  margin `-0.006959`, teacher `5/5`. Behavior diagnostics were generated and
+  synced locally under
+  `v1/artifacts/claim_suite_semimarkov_n5_value_residual_ablate/aggregate/`.
+  This establishes that the task-composite objective is necessary for the
+  deployable claim, while DAgger is not material for the current value-residual
+  implementation.
+- Added `v1/docs/claim_results_2026-06-01.md` as the paper-ready claim note.
+  It records the main n=5 result, value-residual-specific ablations, behavior
+  diagnostics, paper-safe claims, and claims to avoid.

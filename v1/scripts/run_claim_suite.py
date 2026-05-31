@@ -8,6 +8,9 @@ import subprocess
 import sys
 import time
 
+for _thread_env in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_thread_env, "1")
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "v1" / "scripts" / "run_protocol_gate.py"
@@ -39,6 +42,25 @@ def parse_args() -> argparse.Namespace:
             "safe_dagger3",
             "knn_safe",
             "knn_safe_dagger3",
+            "cost_safe",
+            "support1_safe",
+            "support2_safe",
+            "support3_safe",
+            "support4_safe",
+            "support5_safe",
+            "support6_safe",
+            "support8_safe",
+            "support12_safe",
+            "support_calib_safe",
+            "mask_safe",
+            "mask_anchor_safe",
+            "hybrid_val_safe",
+            "residual_safe",
+            "oracle_context_safe",
+            "value_residual_safe",
+            "value_residual_no_dagger",
+            "value_residual_oracle_objective",
+            "cost_support6_safe",
             "no_dagger",
             "oracle_objective",
             "no_anchor_guard",
@@ -220,6 +242,24 @@ def base_command(
         "safe_dagger3",
         "knn_safe",
         "knn_safe_dagger3",
+        "cost_safe",
+        "support1_safe",
+        "support2_safe",
+        "support3_safe",
+        "support4_safe",
+        "support5_safe",
+        "support6_safe",
+        "support8_safe",
+        "support12_safe",
+        "support_calib_safe",
+        "mask_safe",
+        "mask_anchor_safe",
+        "hybrid_val_safe",
+        "residual_safe",
+        "oracle_context_safe",
+        "value_residual_safe",
+        "value_residual_no_dagger",
+        "cost_support6_safe",
         "no_dagger",
         "no_anchor_guard",
     }:
@@ -235,7 +275,7 @@ def base_command(
                 *TASK_SCALES,
             ]
         )
-    elif preset == "oracle_objective":
+    elif preset in {"oracle_objective", "value_residual_oracle_objective"}:
         common.extend(["--objective-mode", "oracle", "--task-error-weight", "0.0"])
     else:
         raise ValueError(f"Unknown preset: {preset}")
@@ -245,17 +285,125 @@ def base_command(
     else:
         common.append("--anchor-regret-guard")
 
-    if preset in {"main_safe", "safe_dagger3", "knn_safe", "knn_safe_dagger3"}:
+    if preset in {
+        "main_safe",
+        "safe_dagger3",
+        "knn_safe",
+        "knn_safe_dagger3",
+        "cost_safe",
+        "support1_safe",
+        "support2_safe",
+        "support3_safe",
+        "support4_safe",
+        "support5_safe",
+        "support6_safe",
+        "support8_safe",
+        "support12_safe",
+        "support_calib_safe",
+        "mask_safe",
+        "mask_anchor_safe",
+        "hybrid_val_safe",
+        "residual_safe",
+        "oracle_context_safe",
+        "value_residual_safe",
+        "value_residual_no_dagger",
+        "value_residual_oracle_objective",
+        "cost_support6_safe",
+    }:
         common.append("--bc-preserve-warming")
     else:
         common.append("--no-bc-preserve-warming")
+
+    support_top_k = {
+        "support1_safe": 1,
+        "support2_safe": 2,
+        "support3_safe": 3,
+        "support4_safe": 4,
+        "support5_safe": 5,
+        "support6_safe": 6,
+        "support8_safe": 8,
+        "support12_safe": 12,
+        "cost_support6_safe": 6,
+        "oracle_context_safe": 5,
+        "value_residual_safe": 5,
+        "value_residual_no_dagger": 5,
+        "value_residual_oracle_objective": 5,
+    }.get(preset, 0)
+    common.extend(["--bc-action-support-top-k", str(support_top_k)])
+    if preset == "support_calib_safe":
+        common.extend(["--bc-action-support-grid", "0", "4", "6", "8", "12"])
+    if preset in {
+        "mask_safe",
+        "mask_anchor_safe",
+        "residual_safe",
+        "value_residual_safe",
+        "value_residual_no_dagger",
+        "value_residual_oracle_objective",
+    }:
+        common.append("--no-include-bc-policy")
+    else:
+        common.append("--include-bc-policy")
 
     if preset in {"knn_safe", "knn_safe_dagger3"}:
         common.extend(["--include-knn-policy", "--knn-k", "7"])
     else:
         common.append("--no-include-knn-policy")
+    if preset in {"mask_safe", "mask_anchor_safe", "hybrid_val_safe"}:
+        common.append("--include-mask-bc-policy")
+        if preset in {"mask_anchor_safe", "hybrid_val_safe"}:
+            common.extend(["--mask-bc-anchor-bias", "0.25"])
+    else:
+        common.append("--no-include-mask-bc-policy")
+    if preset == "hybrid_val_safe":
+        common.extend(["--deployable-selection", "validation"])
+    if preset == "residual_safe":
+        common.extend(
+            [
+                "--include-residual-bc-policy",
+                "--residual-bc-support-top-k",
+                "5",
+                "--residual-deviation-threshold-grid",
+                "0.05",
+                "0.1",
+                "0.2",
+                "0.35",
+                "0.5",
+                "0.65",
+                "0.8",
+                "0.9",
+                "0.98",
+            ]
+        )
+    else:
+        common.append("--no-include-residual-bc-policy")
+    if preset == "oracle_context_safe":
+        common.append("--forecast-truth-future")
+    if preset in {"value_residual_safe", "value_residual_no_dagger", "value_residual_oracle_objective"}:
+        common.extend(
+            [
+                "--include-value-residual-policy",
+                "--value-residual-support-top-k",
+                "5",
+                "--value-residual-advantage-grid",
+                "-1.0",
+                "-0.5",
+                "-0.2",
+                "-0.1",
+                "0.0",
+                "0.1",
+                "0.2",
+                "0.5",
+                "1.0",
+            ]
+        )
+    else:
+        common.append("--no-include-value-residual-policy")
+    if preset in {"cost_safe", "cost_support6_safe"}:
+        common.extend(["--include-cost-policy", "--cost-epochs", "50", "--cost-hidden-dim", "256"])
+    else:
+        common.append("--no-include-cost-policy")
 
-    if preset == "no_dagger":
+    if preset in {"no_dagger", "value_residual_no_dagger"}:
         common.extend(["--dagger-iters", "0"])
     elif preset in {"safe_dagger3", "knn_safe_dagger3"}:
         common.extend(["--dagger-iters", "3"])

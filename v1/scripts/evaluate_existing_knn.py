@@ -21,7 +21,7 @@ from forecast_cmdp.archived_v2 import (  # noqa: E402
 )
 from forecast_cmdp.dataset import TeacherDataset  # noqa: E402
 from forecast_cmdp.features import ForecastContextConfig  # noqa: E402
-from forecast_cmdp.policy import ForecastAwareCyclePolicy, ForecastAwareKNNPolicy  # noqa: E402
+from forecast_cmdp.policy import ForecastAwareBCPolicy, ForecastAwareCyclePolicy, ForecastAwareKNNPolicy, load_bc_policy_checkpoint  # noqa: E402
 from forecast_cmdp.protocol import (  # noqa: E402
     evaluate_policy_over_starts,
     final_objective,
@@ -29,14 +29,16 @@ from forecast_cmdp.protocol import (  # noqa: E402
     save_rollout,
     task_focus_metrics,
 )
-from run_protocol_gate import make_common_env_config  # noqa: E402
+from run_protocol_gate import action_support_from_labels, make_common_env_config  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Posthoc-evaluate KNN deployable policy in an existing v1 run dir.")
+    parser = argparse.ArgumentParser(description="Posthoc-evaluate deployable policy variants in an existing v1 run dir.")
     parser.add_argument("run_dir")
-    parser.add_argument("--policy", choices=["knn", "cycle"], default="knn")
+    parser.add_argument("--policy", choices=["knn", "cycle", "bc_support"], default="knn")
     parser.add_argument("--k", type=int, default=7)
+    parser.add_argument("--top-k", type=int, default=6)
+    parser.add_argument("--min-count", type=int, default=0)
     parser.add_argument("--preserve-warming", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
@@ -45,6 +47,11 @@ def main() -> None:
     args = parse_args()
     run_dir = Path(args.run_dir)
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    if "run_args" not in manifest:
+        raise ValueError(
+            f"{run_dir} uses an older manifest without run_args; "
+            "posthoc deployment rescoring requires artifacts produced after the claim-suite runner update."
+        )
     run_args = Namespace(**dict(manifest["run_args"]))
     helpers = load_v2_helpers()
     truth = pd.read_csv(manifest["truth_csv"])
@@ -81,13 +88,32 @@ def main() -> None:
             preserve_warming=bool(args.preserve_warming),
         )
         policy_name = "forecast_aware_knn_posthoc"
-    else:
+    elif str(args.policy) == "cycle":
         policy = ForecastAwareCyclePolicy(
             labels=dataset.labels,
             candidate_masks=dataset.candidate_masks,
             preserve_warming=bool(args.preserve_warming),
         )
         policy_name = "forecast_aware_cycle_posthoc"
+    else:
+        loaded = load_bc_policy_checkpoint(run_dir / "forecast_aware_bc.pt", device=str(run_args.bc_device))
+        support = action_support_from_labels(
+            dataset.labels,
+            n_actions=int(dataset.candidate_masks.shape[0]),
+            top_k=int(args.top_k),
+            min_count=int(args.min_count),
+            anchor_idx=int(manifest["selected_static"]["action_idx"]),
+        )
+        policy = ForecastAwareBCPolicy(
+            model=loaded.model,
+            candidate_masks=dataset.candidate_masks,
+            forecast_cfg=forecast_cfg,
+            device=str(run_args.bc_device),
+            allowed_action_indices=support,
+            preserve_warming=bool(args.preserve_warming),
+            name="forecast_aware_bc_support_posthoc",
+        )
+        policy_name = "forecast_aware_bc_support_posthoc"
     result, simple_metrics = evaluate_policy_over_starts(
         truth=truth,
         sensors=sensors,
@@ -120,9 +146,12 @@ def main() -> None:
         mode=str(run_args.objective_mode),
         task_error_weight=float(run_args.task_error_weight),
     )
-    pd.DataFrame([metrics]).to_csv(run_dir / f"metrics_{args.policy}_posthoc.csv", index=False)
+    suffix = str(args.policy)
+    if str(args.policy) == "bc_support":
+        suffix = f"bc_support_top{int(args.top_k)}_min{int(args.min_count)}"
+    pd.DataFrame([metrics]).to_csv(run_dir / f"metrics_{suffix}_posthoc.csv", index=False)
     save_rollout(
-        run_dir / f"rollout_forecast_aware_{args.policy}_posthoc.npz",
+        run_dir / f"rollout_forecast_aware_{suffix}_posthoc.npz",
         result,
         sensor_ids=sensor_ids,
         state_columns=state_columns,
@@ -131,13 +160,15 @@ def main() -> None:
     summary = {
         "policy": policy_name,
         "k": int(args.k),
+        "top_k": int(args.top_k),
+        "min_count": int(args.min_count),
         "preserve_warming": bool(args.preserve_warming),
         "static_objective": static_objective,
         "objective": float(metrics["objective_loss_mean"]),
         "margin": static_objective - float(metrics["objective_loss_mean"]),
         "gate_pass": bool(float(metrics["objective_loss_mean"]) < static_objective),
     }
-    (run_dir / f"gate_summary_{args.policy}_posthoc.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (run_dir / f"gate_summary_{suffix}_posthoc.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 
 

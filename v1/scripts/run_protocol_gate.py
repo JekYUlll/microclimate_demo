@@ -4,8 +4,12 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import sys
+
+for _thread_env in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ.setdefault(_thread_env, "1")
 
 import numpy as np
 import pandas as pd
@@ -23,6 +27,13 @@ from forecast_cmdp.archived_v2 import (
     normalization_stats,
     resolve_archive_path,
 )
+from forecast_cmdp.cost_policy import (
+    ActionCostTrainingConfig,
+    ForecastAwareCostPolicy,
+    ForecastAwareValueResidualPolicy,
+    collect_action_cost_dataset,
+    train_action_cost_model,
+)
 from forecast_cmdp.dataset import collect_dagger_dataset, collect_teacher_dataset, concat_teacher_datasets
 from forecast_cmdp.features import ForecastContextConfig
 from forecast_cmdp.mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, enumerate_action_masks
@@ -30,8 +41,12 @@ from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
     ForecastAwareKNNPolicy,
+    ForecastAwareMaskBCPolicy,
+    ForecastAwareResidualBCPolicy,
     save_bc_policy_checkpoint,
     train_bc_classifier,
+    train_deviation_gate,
+    train_mask_bc,
 )
 from forecast_cmdp.protocol import (
     choose_non_overlapping_starts,
@@ -69,6 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--selection", choices=["event_rich", "uniform"], default="event_rich")
     parser.add_argument("--selection-stride", type=int, default=64)
     parser.add_argument("--event-column", default="event_flag")
+    parser.add_argument("--forecast-truth-future", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--lookback", type=int, default=20)
     parser.add_argument("--horizon", type=int, default=8)
     parser.add_argument("--objective-mode", choices=["oracle", "task_composite"], default="oracle")
@@ -138,8 +154,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dagger-iters", type=int, default=0)
     parser.add_argument("--dagger-steps", type=int, default=None)
     parser.add_argument("--bc-preserve-warming", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--bc-action-support-top-k", type=int, default=0)
+    parser.add_argument("--bc-action-support-min-count", type=int, default=0)
+    parser.add_argument("--bc-action-support-grid", nargs="*", type=int, default=[])
+    parser.add_argument("--include-bc-policy", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--include-residual-bc-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--residual-bc-support-top-k", type=int, default=5)
+    parser.add_argument("--residual-deviation-threshold-grid", nargs="*", type=float, default=[0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9])
+    parser.add_argument("--include-mask-bc-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--mask-bc-required-rate", type=float, default=0.95)
+    parser.add_argument("--mask-bc-anchor-bias", type=float, default=0.0)
     parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--knn-k", type=int, default=5)
+    parser.add_argument("--include-cost-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--include-value-residual-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--value-residual-support-top-k", type=int, default=5)
+    parser.add_argument(
+        "--value-residual-advantage-grid",
+        nargs="*",
+        type=float,
+        default=[-1.0, -0.5, -0.2, -0.1, 0.0, 0.1, 0.2, 0.5, 1.0],
+    )
+    parser.add_argument("--cost-epochs", type=int, default=50)
+    parser.add_argument("--cost-hidden-dim", type=int, default=256)
+    parser.add_argument("--deployable-selection", choices=["all_final", "validation"], default="all_final")
     parser.add_argument("--bc-fallback-source", choices=["none", "validation_static"], default="none")
     parser.add_argument(
         "--bc-logit-margin-grid",
@@ -332,7 +370,11 @@ def main() -> None:
         task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
         task_error_event_only=bool(args.task_error_event_only),
     )
-    forecast_cfg = ForecastContextConfig(horizon=int(args.horizon), event_column=str(args.event_column), truth_future=False)
+    forecast_cfg = ForecastContextConfig(
+        horizon=int(args.horizon),
+        event_column=str(args.event_column),
+        truth_future=bool(args.forecast_truth_future),
+    )
 
     train_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
     log("collecting MPC teacher dataset")
@@ -405,6 +447,130 @@ def main() -> None:
         train_cfg=bc_cfg,
         history=bc_history,
     )
+    residual_gate_model = None
+    residual_gate_history = None
+    residual_threshold = None
+    residual_support = None
+    residual_validation_objective = None
+    if bool(args.include_residual_bc_policy):
+        log("training residual deviation gate")
+        residual_gate_model, residual_gate_history = train_deviation_gate(
+            teacher_dataset.features,
+            teacher_dataset.labels,
+            anchor_idx=selected_static_idx,
+            cfg=bc_cfg,
+        )
+        residual_support = action_support_from_labels(
+            teacher_dataset.labels,
+            n_actions=int(candidate_masks.shape[0]),
+            top_k=int(args.residual_bc_support_top_k),
+            min_count=int(args.bc_action_support_min_count),
+            anchor_idx=selected_static_idx,
+        )
+        residual_threshold, residual_validation_objective = calibrate_residual_threshold(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            bc_model=bc_model,
+            gate_model=residual_gate_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=selected_static_mask,
+            allowed_action_indices=residual_support,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        log(
+            "residual BC calibration: "
+            f"threshold={residual_threshold} validation_objective={residual_validation_objective:.6f} "
+            f"support={list(residual_support) if residual_support is not None else None}"
+        )
+    mask_bc_model = None
+    mask_bc_history = None
+    mask_bc_required_indices: tuple[int, ...] = ()
+    if bool(args.include_mask_bc_policy):
+        log("training sensor-mask BC policy")
+        mask_bc_model, mask_bc_history = train_mask_bc(
+            teacher_dataset.features,
+            teacher_dataset.labels,
+            teacher_dataset.candidate_masks,
+            cfg=bc_cfg,
+        )
+        label_masks = np.asarray(teacher_dataset.candidate_masks, dtype=bool)[
+            np.asarray(teacher_dataset.labels, dtype=int)
+        ]
+        rates = np.mean(label_masks, axis=0) if label_masks.size else np.zeros(len(sensor_ids), dtype=float)
+        threshold = float(args.mask_bc_required_rate)
+        if threshold > 0.0:
+            mask_bc_required_indices = tuple(int(idx) for idx in np.flatnonzero(rates >= threshold))
+        log(
+            "sensor-mask BC training complete: "
+            f"final_sensor_accuracy={mask_bc_history['sensor_accuracy'][-1] if mask_bc_history and mask_bc_history.get('sensor_accuracy') else float('nan')} "
+            f"required={[sensor_ids[idx] for idx in mask_bc_required_indices]}"
+        )
+    cost_model = None
+    cost_history = None
+    value_residual_support = None
+    value_residual_threshold = None
+    value_residual_validation_objective = None
+    if bool(args.include_cost_policy) or bool(args.include_value_residual_policy):
+        log("collecting action-cost dataset")
+        cost_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
+        cost_dataset = collect_action_cost_dataset(
+            cost_env,
+            candidate_masks,
+            start_indices=starts["train"].starts,
+            steps_per_start=int(args.train_steps),
+            teacher_cfg=teacher_cfg,
+            forecast_cfg=forecast_cfg,
+        )
+        log(f"action-cost dataset collected: rows={cost_dataset.inputs.shape[0]}")
+        cost_model, cost_history = train_action_cost_model(
+            cost_dataset,
+            ActionCostTrainingConfig(
+                hidden_dim=int(args.cost_hidden_dim),
+                epochs=int(args.cost_epochs),
+                batch_size=512,
+                seed=int(args.seed),
+                device=str(args.bc_device),
+            ),
+        )
+        log(
+            "action-cost model training complete: "
+            f"final_loss={cost_history['loss'][-1] if cost_history and cost_history.get('loss') else float('nan')}"
+        )
+    if bool(args.include_value_residual_policy) and cost_model is not None:
+        value_residual_support = action_support_from_labels(
+            teacher_dataset.labels,
+            n_actions=int(candidate_masks.shape[0]),
+            top_k=int(args.value_residual_support_top_k),
+            min_count=int(args.bc_action_support_min_count),
+            anchor_idx=selected_static_idx,
+        )
+        value_residual_threshold, value_residual_validation_objective = calibrate_value_residual_threshold(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            model=cost_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=selected_static_mask,
+            allowed_action_indices=value_residual_support,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        log(
+            "value-residual calibration: "
+            f"threshold={value_residual_threshold} "
+            f"validation_objective={value_residual_validation_objective:.6f} "
+            f"support={list(value_residual_support) if value_residual_support is not None else None}"
+        )
     bc_fallback_margin = None
     if str(args.bc_fallback_source) == "validation_static":
         bc_fallback_margin, bc_validation_objective = calibrate_bc_fallback_margin(
@@ -425,19 +591,71 @@ def main() -> None:
             "BC fallback calibration: "
             f"margin={bc_fallback_margin} validation_objective={bc_validation_objective:.6f}"
         )
-    policies = [
-        StaticMaskPolicy(mask=selected_static_mask, name="validation_selected_static"),
-        MpcTeacherPolicy(candidate_masks=candidate_masks, cfg=teacher_cfg, name="mpc_teacher"),
-        ForecastAwareBCPolicy(
+    bc_action_support_top_k = int(args.bc_action_support_top_k)
+    bc_action_support_validation_objective = None
+    if args.bc_action_support_grid:
+        (
+            bc_action_support_top_k,
+            bc_action_support_validation_objective,
+        ) = calibrate_bc_action_support(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
             model=bc_model,
             candidate_masks=candidate_masks,
             forecast_cfg=forecast_cfg,
-            device=str(args.bc_device),
-            fallback_mask=selected_static_mask if str(args.bc_fallback_source) == "validation_static" else None,
-            min_logit_margin=bc_fallback_margin,
-            preserve_warming=bool(args.bc_preserve_warming),
-        ),
+            labels=teacher_dataset.labels,
+            anchor_idx=selected_static_idx,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        log(
+            "BC action-support calibration: "
+            f"top_k={bc_action_support_top_k} validation_objective={bc_action_support_validation_objective:.6f}"
+        )
+    bc_action_support = action_support_from_labels(
+        teacher_dataset.labels,
+        n_actions=int(candidate_masks.shape[0]),
+        top_k=int(bc_action_support_top_k),
+        min_count=int(args.bc_action_support_min_count),
+        anchor_idx=selected_static_idx,
+    )
+    if bc_action_support is not None:
+        log(f"BC action support enabled: n={len(bc_action_support)} indices={list(bc_action_support)}")
+    policies = [
+        StaticMaskPolicy(mask=selected_static_mask, name="validation_selected_static"),
+        MpcTeacherPolicy(candidate_masks=candidate_masks, cfg=teacher_cfg, name="mpc_teacher"),
     ]
+    if bool(args.include_bc_policy):
+        policies.append(
+            ForecastAwareBCPolicy(
+                model=bc_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                device=str(args.bc_device),
+                fallback_mask=selected_static_mask if str(args.bc_fallback_source) == "validation_static" else None,
+                allowed_action_indices=bc_action_support,
+                min_logit_margin=bc_fallback_margin,
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
+    if bool(args.include_residual_bc_policy) and residual_gate_model is not None:
+        policies.append(
+            ForecastAwareResidualBCPolicy(
+                bc_model=bc_model,
+                gate_model=residual_gate_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=selected_static_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=residual_support,
+                deviate_threshold=float(residual_threshold if residual_threshold is not None else 0.5),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
     if bool(args.include_knn_policy):
         policies.append(
             ForecastAwareKNNPolicy(
@@ -446,6 +664,42 @@ def main() -> None:
                 candidate_masks=candidate_masks,
                 forecast_cfg=forecast_cfg,
                 k=int(args.knn_k),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
+    if bool(args.include_mask_bc_policy) and mask_bc_model is not None:
+        policies.append(
+            ForecastAwareMaskBCPolicy(
+                model=mask_bc_model,
+                forecast_cfg=forecast_cfg,
+                device=str(args.bc_device),
+                preserve_warming=bool(args.bc_preserve_warming),
+                required_sensor_indices=mask_bc_required_indices,
+                anchor_mask=selected_static_mask,
+                anchor_bias=float(args.mask_bc_anchor_bias),
+            )
+        )
+    if bool(args.include_cost_policy) and cost_model is not None:
+        policies.append(
+            ForecastAwareCostPolicy(
+                model=cost_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                device=str(args.bc_device),
+                allowed_action_indices=bc_action_support,
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
+    if bool(args.include_value_residual_policy) and cost_model is not None:
+        policies.append(
+            ForecastAwareValueResidualPolicy(
+                model=cost_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=selected_static_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=value_residual_support,
+                advantage_threshold=float(value_residual_threshold if value_residual_threshold is not None else 0.0),
                 preserve_warming=bool(args.bc_preserve_warming),
             )
         )
@@ -465,6 +719,23 @@ def main() -> None:
     if bool(args.include_rule_baselines):
         policies.append(FullOpenUnconstrainedScorePolicy(n_sensors=len(sensors), name="full_open_unconstrained"))
         policies.extend(default_policies(len(sensors), seed=int(args.seed) + 404))
+
+    deployable_validation_rows: list[dict[str, object]] = []
+    selected_deployable_name = None
+    if str(args.deployable_selection) == "validation":
+        policies, selected_deployable_name, deployable_validation_rows = select_deployables_for_final(
+            args,
+            policies=policies,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            state_columns=state_columns,
+            sensor_ids=sensor_ids,
+            starts=starts["validation"].starts,
+        )
+        log(f"validation-selected deployable policy={selected_deployable_name}")
 
     rows: list[dict[str, object]] = []
     for policy in policies:
@@ -525,7 +796,18 @@ def main() -> None:
     )
     teacher_rows = metrics_df.loc[metrics_df["policy"] == "mpc_teacher"]
     teacher = teacher_rows.iloc[0] if not teacher_rows.empty else None
-    deployable = metrics_df[metrics_df["policy"].isin(["forecast_aware_bc", "forecast_aware_knn"])]
+    deployable = metrics_df[
+        metrics_df["policy"].isin(
+            [
+                "forecast_aware_bc",
+                "forecast_aware_knn",
+                "forecast_aware_cost",
+                "forecast_aware_mask_bc",
+                "forecast_aware_residual_bc",
+                "forecast_aware_value_residual",
+            ]
+        )
+    ]
     best_deployable = deployable.sort_values("objective_loss_mean").iloc[0] if not deployable.empty else None
     gate_summary = {
         "objective_metric": str(args.objective_mode),
@@ -592,9 +874,55 @@ def main() -> None:
             "final_samples": int(teacher_dataset.features.shape[0]),
         },
         "bc_preserve_warming": bool(args.bc_preserve_warming),
+        "bc_policy_included": bool(args.include_bc_policy),
+        "residual_bc_policy": {
+            "included": bool(args.include_residual_bc_policy),
+            "support_top_k": int(args.residual_bc_support_top_k),
+            "support_indices": [int(x) for x in residual_support] if residual_support is not None else None,
+            "threshold": residual_threshold,
+            "threshold_grid": [float(x) for x in args.residual_deviation_threshold_grid],
+            "validation_objective": residual_validation_objective,
+            "gate_history": residual_gate_history,
+        },
+        "bc_action_support": {
+            "top_k": int(bc_action_support_top_k),
+            "min_count": int(args.bc_action_support_min_count),
+            "grid": [int(x) for x in args.bc_action_support_grid],
+            "validation_objective": bc_action_support_validation_objective,
+            "indices": [int(x) for x in bc_action_support] if bc_action_support is not None else None,
+        },
+        "mask_bc_policy": {
+            "included": bool(args.include_mask_bc_policy),
+            "required_rate": float(args.mask_bc_required_rate),
+            "required_indices": [int(x) for x in mask_bc_required_indices],
+            "required_sensor_ids": [sensor_ids[int(x)] for x in mask_bc_required_indices],
+            "anchor_bias": float(args.mask_bc_anchor_bias),
+            "history": mask_bc_history,
+        },
+        "deployable_selection": {
+            "mode": str(args.deployable_selection),
+            "selected_policy": selected_deployable_name,
+            "validation_rows": deployable_validation_rows,
+        },
         "knn_policy": {
             "included": bool(args.include_knn_policy),
             "k": int(args.knn_k),
+        },
+        "cost_policy": {
+            "included": bool(args.include_cost_policy),
+            "epochs": int(args.cost_epochs),
+            "hidden_dim": int(args.cost_hidden_dim),
+            "history": cost_history,
+        },
+        "value_residual_policy": {
+            "included": bool(args.include_value_residual_policy),
+            "support_top_k": int(args.value_residual_support_top_k),
+            "support_indices": [int(x) for x in value_residual_support]
+            if value_residual_support is not None
+            else None,
+            "advantage_threshold": value_residual_threshold,
+            "advantage_grid": [float(x) for x in args.value_residual_advantage_grid],
+            "validation_objective": value_residual_validation_objective,
         },
         "bc_fallback": {
             "source": str(args.bc_fallback_source),
@@ -792,6 +1120,326 @@ def calibrate_bc_fallback_margin(
     rows.sort(key=lambda item: (item[0], item[1], item[3]))
     best_objective, _, best_margin, _ = rows[0]
     return float(best_margin), float(best_objective)
+
+
+def calibrate_bc_action_support(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    labels: np.ndarray,
+    anchor_idx: int | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[int, float]:
+    rows: list[tuple[float, float, int, int]] = []
+    grid = [int(x) for x in args.bc_action_support_grid]
+    if not grid:
+        grid = [int(args.bc_action_support_top_k)]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    for idx, top_k in enumerate(grid):
+        support = action_support_from_labels(
+            labels,
+            n_actions=int(candidate_masks.shape[0]),
+            top_k=max(0, int(top_k)),
+            min_count=int(args.bc_action_support_min_count),
+            anchor_idx=anchor_idx,
+        )
+        policy = ForecastAwareBCPolicy(
+            model=model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            device=str(args.bc_device),
+            allowed_action_indices=support,
+            preserve_warming=bool(args.bc_preserve_warming),
+            name=f"forecast_aware_bc_support_calib_{idx}",
+        )
+        result, _ = evaluate_policy_over_starts(
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=cfg,
+            oracle=oracle,
+            policy=policy,
+            steps=int(args.static_selection_steps),
+            start_indices=starts,
+            seed_offset=90_000 + idx * 101,
+        )
+        metrics = rich_metrics(
+            result,
+            sensor_ids=sensor_ids,
+            state_columns=state_columns,
+            per_step_budget=float(args.budget),
+            startup_peak_budget=float(args.startup_peak_budget),
+        )
+        metrics.update(
+            task_focus_metrics(
+                result,
+                state_columns=state_columns,
+                task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                event_only=bool(args.task_error_event_only),
+            )
+        )
+        objective = final_objective(
+            metrics,
+            mode=str(args.objective_mode),
+            task_error_weight=float(args.task_error_weight),
+        )
+        rows.append((float(objective), float(metrics.get("power_mean", np.nan)), max(0, int(top_k)), idx))
+    rows.sort(key=lambda item: (item[0], item[1], item[3]))
+    best_objective, _, best_top_k, _ = rows[0]
+    return int(best_top_k), float(best_objective)
+
+
+def calibrate_residual_threshold(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    bc_model: object,
+    gate_model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    anchor_mask: tuple[bool, ...],
+    allowed_action_indices: tuple[int, ...] | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[float, float]:
+    rows: list[tuple[float, float, float, int]] = []
+    grid = [float(x) for x in args.residual_deviation_threshold_grid] or [0.5]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    for idx, threshold in enumerate(grid):
+        policy = ForecastAwareResidualBCPolicy(
+            bc_model=bc_model,
+            gate_model=gate_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=anchor_mask,
+            device=str(args.bc_device),
+            allowed_action_indices=allowed_action_indices,
+            deviate_threshold=float(threshold),
+            preserve_warming=bool(args.bc_preserve_warming),
+            name=f"forecast_aware_residual_bc_calib_{idx}",
+        )
+        result, _ = evaluate_policy_over_starts(
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=cfg,
+            oracle=oracle,
+            policy=policy,
+            steps=int(args.static_selection_steps),
+            start_indices=starts,
+            seed_offset=120_000 + idx * 101,
+        )
+        metrics = rich_metrics(
+            result,
+            sensor_ids=sensor_ids,
+            state_columns=state_columns,
+            per_step_budget=float(args.budget),
+            startup_peak_budget=float(args.startup_peak_budget),
+        )
+        metrics.update(
+            task_focus_metrics(
+                result,
+                state_columns=state_columns,
+                task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                event_only=bool(args.task_error_event_only),
+            )
+        )
+        objective = final_objective(
+            metrics,
+            mode=str(args.objective_mode),
+            task_error_weight=float(args.task_error_weight),
+        )
+        rows.append((float(objective), float(metrics.get("power_mean", np.nan)), float(threshold), idx))
+    rows.sort(key=lambda item: (item[0], item[1], item[3]))
+    best_objective, _, best_threshold, _ = rows[0]
+    return float(best_threshold), float(best_objective)
+
+
+def calibrate_value_residual_threshold(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    anchor_mask: tuple[bool, ...],
+    allowed_action_indices: tuple[int, ...] | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[float, float]:
+    rows: list[tuple[float, float, float, int]] = []
+    grid = [float(x) for x in args.value_residual_advantage_grid] or [0.0]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    for idx, threshold in enumerate(grid):
+        policy = ForecastAwareValueResidualPolicy(
+            model=model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=anchor_mask,
+            device=str(args.bc_device),
+            allowed_action_indices=allowed_action_indices,
+            advantage_threshold=float(threshold),
+            preserve_warming=bool(args.bc_preserve_warming),
+            name=f"forecast_aware_value_residual_calib_{idx}",
+        )
+        result, _ = evaluate_policy_over_starts(
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=cfg,
+            oracle=oracle,
+            policy=policy,
+            steps=int(args.static_selection_steps),
+            start_indices=starts,
+            seed_offset=130_000 + idx * 101,
+        )
+        metrics = rich_metrics(
+            result,
+            sensor_ids=sensor_ids,
+            state_columns=state_columns,
+            per_step_budget=float(args.budget),
+            startup_peak_budget=float(args.startup_peak_budget),
+        )
+        metrics.update(
+            task_focus_metrics(
+                result,
+                state_columns=state_columns,
+                task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                event_only=bool(args.task_error_event_only),
+            )
+        )
+        objective = final_objective(
+            metrics,
+            mode=str(args.objective_mode),
+            task_error_weight=float(args.task_error_weight),
+        )
+        rows.append((float(objective), float(metrics.get("power_mean", np.nan)), float(threshold), idx))
+    rows.sort(key=lambda item: (item[0], item[1], item[3]))
+    best_objective, _, best_threshold, _ = rows[0]
+    return float(best_threshold), float(best_objective)
+
+
+def select_deployables_for_final(
+    args: argparse.Namespace,
+    *,
+    policies: list[object],
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    state_columns: tuple[str, ...],
+    sensor_ids: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[list[object], str | None, list[dict[str, object]]]:
+    deployable_names = {
+        "forecast_aware_bc",
+        "forecast_aware_knn",
+        "forecast_aware_cost",
+        "forecast_aware_mask_bc",
+        "forecast_aware_residual_bc",
+        "forecast_aware_value_residual",
+    }
+    fixed = [policy for policy in policies if str(policy.name) not in deployable_names]
+    candidates = [policy for policy in policies if str(policy.name) in deployable_names]
+    if not candidates:
+        return policies, None, []
+    rows: list[dict[str, object]] = []
+    for idx, policy in enumerate(candidates):
+        result, _ = evaluate_policy_over_starts(
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=cfg,
+            oracle=oracle,
+            policy=policy,
+            steps=int(args.static_selection_steps),
+            start_indices=starts,
+            seed_offset=110_000 + idx * 101,
+        )
+        metrics = rich_metrics(
+            result,
+            sensor_ids=sensor_ids,
+            state_columns=state_columns,
+            per_step_budget=float(args.budget),
+            startup_peak_budget=float(args.startup_peak_budget),
+        )
+        metrics.update(
+            task_focus_metrics(
+                result,
+                state_columns=state_columns,
+                task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                event_only=bool(args.task_error_event_only),
+            )
+        )
+        objective = final_objective(
+            metrics,
+            mode=str(args.objective_mode),
+            task_error_weight=float(args.task_error_weight),
+        )
+        rows.append(
+            {
+                "policy": str(policy.name),
+                "objective": float(objective),
+                "power_mean": float(metrics.get("power_mean", np.nan)),
+                "warmup_abort_count": int(metrics.get("warmup_abort_count", 0)),
+            }
+        )
+    rows.sort(key=lambda item: (float(item["objective"]), float(item["power_mean"]), int(item["warmup_abort_count"])))
+    selected_name = str(rows[0]["policy"])
+    selected = [policy for policy in candidates if str(policy.name) == selected_name][0]
+    return [*fixed, selected], selected_name, rows
+
+
+def action_support_from_labels(
+    labels: np.ndarray,
+    *,
+    n_actions: int,
+    top_k: int,
+    min_count: int,
+    anchor_idx: int | None,
+) -> tuple[int, ...] | None:
+    top_k = int(top_k)
+    min_count = int(min_count)
+    if top_k <= 0 and min_count <= 0:
+        return None
+    values = np.asarray(labels, dtype=int).reshape(-1)
+    values = values[(values >= 0) & (values < int(n_actions))]
+    if values.size == 0:
+        return None
+    counts = np.bincount(values, minlength=int(n_actions))
+    selected: set[int] = set()
+    if top_k > 0:
+        positive = np.flatnonzero(counts > 0)
+        order = sorted((int(idx) for idx in positive), key=lambda idx: (-int(counts[idx]), idx))
+        selected.update(order[: min(top_k, len(order))])
+    if min_count > 0:
+        selected.update(int(idx) for idx in np.flatnonzero(counts >= min_count))
+    if anchor_idx is not None and 0 <= int(anchor_idx) < int(n_actions):
+        selected.add(int(anchor_idx))
+    if not selected:
+        return None
+    return tuple(sorted(selected))
 
 
 def log(message: str) -> None:

@@ -8,7 +8,8 @@ PD-PPO failure modes: missing explicit forecast context, weak credit assignment,
 fixed penalty constraint handling, and lack of teacher guidance.
 
 ## Current Phase
-Phase 5a in progress: multi-seed claim suite implementation and launch.
+Phase 5f in progress: value-residual main claim and required ablations are
+complete; consolidating paper-ready tables and claims.
 
 ## Minimum Claim Target
 - In strict chronological split protocol, the deployable forecast-aware DAgger
@@ -73,11 +74,26 @@ Phase 5a in progress: multi-seed claim suite implementation and launch.
 - [x] Launch and pass server seed-41 medium gate for corrected v1 method.
 - [x] Implement batch multi-seed claim-suite launcher.
 - [x] Implement claim-suite aggregator and pass/fail assessment.
-- [ ] Run n=5 with task-composite objective and DAgger-BC.
-- [ ] Run required ablations: no-DAgger and oracle-only objective.
-- [ ] Aggregate results and produce behavior diagnostics.
-- [ ] Replace unstable deployable action classification with action-cost/value
+- [x] Run n=5 with task-composite objective and value-residual deployable
+  policy. `value_residual_safe` passed: deployable `4/5`, teacher `5/5`,
+  mean deployable margin `+0.002213`.
+- [x] Run required ablations: no-DAgger and oracle-only objective.
+  `value_residual_no_dagger` passed with the same `4/5` pattern as the main
+  method; `value_residual_oracle_objective` failed at `2/5` with negative mean
+  deployable margin.
+- [x] Aggregate results and produce behavior diagnostics.
+- [x] Replace unstable deployable action classification with action-cost/value
   imitation and rerun n=5.
+- [ ] Evaluate teacher-label action-support deployment guards (`support4/6/8/12`)
+  and rerun the best supported deployable method on n=5.
+- [ ] Prefer validation-calibrated action-support selection
+  (`support_calib_safe`) over final-test posthoc top-k selection if it passes.
+- [ ] Evaluate sensor-level mask BC (`mask_safe`/`mask_anchor_safe`) as the
+  fallback deployable layer if action-id support guards are insufficient.
+- [ ] Evaluate residual anchor-deviation BC (`residual_safe`) after
+  `support1_safe`--`support5_safe` all failed at `2/5` deployable wins.
+- [x] Evaluate value-residual action-cost policy (`value_residual_safe`) after
+  `residual_safe` and privileged-context BC failed.
 - [ ] Update manuscript only if strict static comparator is beaten robustly.
 - **Status:** in_progress
 
@@ -90,3 +106,4 @@ Phase 5a in progress: multi-seed claim suite implementation and launch.
 | 2026-05-27 | Absolute-loss MPC can drift away from a strong static solution | Added static-anchor regret guard and task-target oracle reweighting options |
 | 2026-05-27 | Oracle-only objective does not value event transport enough for dynamic sensing | Added task-composite objective and event-transport task error |
 | 2026-05-27 | BC fitted teacher labels but failed rollout gate | Added one-iteration DAgger; medium seed-41 gate passed |
+| 2026-05-27 | Action-cost policy minimized over OOD feasible masks and dropped core context sensors | Added teacher-label action-support guard plus static-anchor inclusion for deployable policies |
