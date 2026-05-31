@@ -130,8 +130,11 @@ will continue toward learned rollout-value / online planning.
   collection treat the validation-selected static anchor as a mask submitted to
   the environment projector, not as an action that must be exactly feasible at
   every warmup state.
+- [x] Fix residual support semantics so a temporarily invalid support set
+  falls back to the static anchor rather than reopening the full OOD action
+  space.
 - [ ] Run corrected calibrated n=5 candidate:
-  `v1_claim_learned_advantage_calib_anchorfix_n5_20260601`.
+  `v1_claim_learned_advantage_calib_anchorfix_strict_n5_20260601`.
 - [ ] Scale the final strong candidate beyond the old n=5 single-setting gate:
   more seeds, at least two budgets, and at least one event-regime perturbation.
 - **Status:** in_progress

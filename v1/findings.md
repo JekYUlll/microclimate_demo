@@ -296,3 +296,9 @@
   anchor mask when predicted advantage is insufficient. This is a cleaner match
   to the comparator and should prevent non-result crashes from being confused
   with scheduler failure.
+- A second support-safety issue was fixed before accepting new evidence: if all
+  teacher-supported action IDs are temporarily infeasible under warmup/startup
+  projection, a residual policy must not reopen the full feasible action space.
+  Reopening the full space reintroduces the earlier OOD action-cost failure
+  mode. The corrected residual policies return an empty supported set in that
+  case, causing an explicit fallback to the validation-static anchor.

@@ -681,3 +681,39 @@ def test_advantage_residual_policy_falls_back_to_projected_anchor():
     action = policy.act_mask(env)
     assert action.tolist() == [True, True, True]
     assert env.projector.project_mask(action, env.runtimes).feasible
+
+
+def test_advantage_residual_policy_does_not_open_full_space_when_support_invalid():
+    import torch
+
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=3)
+    anchor = (True, True, True)
+    anchor_idx = int(np.flatnonzero(np.all(masks == np.asarray([anchor], dtype=bool), axis=1))[0])
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+
+    class PositiveAdvantageModel:
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, x):
+            return torch.ones((x.shape[0], 1), dtype=torch.float32, device=x.device)
+
+    policy = ForecastAwareAdvantageResidualPolicy(
+        model=PositiveAdvantageModel(),
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        anchor_mask=anchor,
+        device="cpu",
+        allowed_action_indices=(anchor_idx,),
+        advantage_threshold=0.0,
+    )
+    env.reset(start_idx=18)
+    projection = env.projector.project_mask(np.asarray(anchor), env.runtimes)
+    assert not np.array_equal(projection.selected_mask, np.asarray(anchor))
+    action = policy.act_mask(env)
+    assert action.tolist() == [True, True, True]

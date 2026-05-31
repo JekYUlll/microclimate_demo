@@ -394,6 +394,7 @@ class ForecastAwareValueResidualPolicy(V2Policy):
         self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
         self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
         self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.has_action_support = self.allowed_action_indices is not None
         self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
         if self.anchor_idx is not None:
             self.allowed_action_mask[int(self.anchor_idx)] = True
@@ -460,6 +461,8 @@ class ForecastAwareValueResidualPolicy(V2Policy):
         allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
         if np.any(allowed):
             return allowed
+        if bool(self.has_action_support):
+            return np.zeros_like(np.asarray(valid, dtype=bool))
         return np.asarray(valid, dtype=bool)
 
 
@@ -488,6 +491,7 @@ class ForecastAwareEnsembleValuePolicy(V2Policy):
         self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
         self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
         self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.has_action_support = self.allowed_action_indices is not None
         self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
         if self.anchor_idx is not None:
             self.allowed_action_mask[int(self.anchor_idx)] = True
@@ -562,6 +566,8 @@ class ForecastAwareEnsembleValuePolicy(V2Policy):
         allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
         if np.any(allowed):
             return allowed
+        if bool(self.has_action_support):
+            return np.zeros_like(np.asarray(valid, dtype=bool))
         return np.asarray(valid, dtype=bool)
 
 
@@ -585,6 +591,7 @@ class ForecastAwareAdvantageResidualPolicy(V2Policy):
         self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
         self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
         self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.has_action_support = self.allowed_action_indices is not None
         self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
         if self.anchor_idx is not None:
             self.allowed_action_mask[int(self.anchor_idx)] = True
@@ -655,6 +662,8 @@ class ForecastAwareAdvantageResidualPolicy(V2Policy):
         allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
         if np.any(allowed):
             return allowed
+        if bool(self.has_action_support):
+            return np.zeros_like(np.asarray(valid, dtype=bool))
         return np.asarray(valid, dtype=bool)
 
 

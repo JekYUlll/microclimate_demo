@@ -657,3 +657,18 @@
   tmux `v1_claim_learned_advantage_calib_anchorfix_n5_20260601`, preset
   `learned_advantage_residual_calib_safe`, seeds `41--45`, output root
   `v1/artifacts/claim_suite_semimarkov_n5_learned_advantage_calib_anchorfix`.
+- Before that run reached the expensive advantage stage, found and fixed a
+  second residual-policy support issue: when a configured support set has no
+  currently exact-feasible action, the residual policies previously reopened
+  the full feasible action space. That contradicted the support guard and could
+  reintroduce OOD action selection. Patched value-residual, ensemble-value, and
+  advantage-residual policies to return an empty supported set in this case so
+  `act_mask` falls back to the static anchor.
+- Added a regression test ensuring advantage-residual does not open the full
+  feasible space when the only supported action is a projected anchor. Local
+  and remote checks now report `17 passed`.
+- Stopped `v1_claim_learned_advantage_calib_anchorfix_n5_20260601` and
+  relaunched a clean strict-support run:
+  tmux `v1_claim_learned_advantage_calib_anchorfix_strict_n5_20260601`,
+  output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_advantage_calib_anchorfix_strict`.
