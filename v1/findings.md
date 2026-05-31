@@ -253,3 +253,46 @@
   frozen oracle, but the deployable scheduler needs the task-composite
   event/transport objective to translate that value into static-comparator
   improvements on final test.
+
+## Strong-Claim Redesign Findings
+- The original strong claim requires a scheduler whose forecast awareness is a
+  learned causal component, not the previous wind-speed heuristic. Otherwise the
+  method is better described as a value-residual static-anchor repair, not a
+  general forecast-aware constrained scheduler.
+- The next necessary architecture step is therefore to make the forecast context
+  learned and split-compliant. The implemented learned event forecaster trains
+  only on pre-validation data and produces multi-horizon probability columns
+  consumed uniformly by teacher data collection, action-cost learning,
+  validation calibration, and final testing.
+- A local tiny-window smoke is not evidence for or against the claim, but it
+  verified the new forecast path is operational. Formal evidence must come from
+  the server n=5 `learned_value_residual_safe` run and then a wider multi-setting
+  matrix.
+- Server learned-forecast n=5 finished at the same qualitative level as the
+  old weak result: deployable `4/5`, mean margin `+0.001856`, sign-test
+  `p=0.375`; teacher remained `5/5` with mean margin `+0.030599`. This proves
+  the learned causal event forecast path works, but it does not by itself
+  strengthen the claim.
+- Server learned-ensemble n=5 failed (`3/5`, mean margin `-0.003409`) despite
+  teacher `5/5`. The seed43 failure was large enough to rule out
+  uncertainty-penalized absolute-cost ensembling as the main deployable route.
+- The next correction should target the decision variable directly. The current
+  value-residual policy learns absolute short-horizon action costs and then
+  subtracts the anchor cost at runtime. For very small final margins, independent
+  absolute-cost errors dominate the residual. The new anchor-advantage residual
+  path instead trains on `cost(anchor) - cost(candidate)` directly and uses
+  validation only to calibrate the required predicted advantage before deviating
+  from the validation-selected static anchor.
+- The first anchor-advantage server launch found an implementation-level
+  semantic mismatch rather than a valid negative result. Static baselines submit
+  a desired mask to the environment and allow the online projector / warmup
+  logic to execute the feasible projection. The first advantage dataset instead
+  required the exact validation-static anchor action to appear with finite
+  beam-search first-action cost at every training state. When the startup peak
+  or warmup state projected that anchor, no rows were collected for seed45.
+- Corrected anchor semantics: advantage labels now use the cost of repeatedly
+  submitting the validation-static anchor mask, even when the current execution
+  is projected, and deployable residual policies can always fall back to that
+  anchor mask when predicted advantage is insufficient. This is a cleaner match
+  to the comparator and should prevent non-result crashes from being confused
+  with scheduler failure.

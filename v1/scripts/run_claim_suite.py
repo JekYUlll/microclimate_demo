@@ -60,6 +60,10 @@ def parse_args() -> argparse.Namespace:
             "value_residual_safe",
             "value_residual_no_dagger",
             "value_residual_oracle_objective",
+            "learned_value_residual_safe",
+            "learned_ensemble_value_safe",
+            "learned_advantage_residual_safe",
+            "learned_advantage_residual_calib_safe",
             "cost_support6_safe",
             "no_dagger",
             "oracle_objective",
@@ -70,6 +74,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sensor-cfg", default="configs/sensors/windblown_sensors_physical_event_v4.yaml")
     parser.add_argument("--oracle-device", default="cpu")
     parser.add_argument("--bc-device", default="cpu")
+    parser.add_argument("--budget", type=float, default=1.20)
+    parser.add_argument("--startup-peak-budget", type=float, default=1.60)
+    parser.add_argument("--energy-capacity", type=float, default=180.0)
+    parser.add_argument("--harvest-per-step", type=float, default=0.92)
+    parser.add_argument("--train-steps", type=int, default=128)
+    parser.add_argument("--train-rollouts", type=int, default=4)
+    parser.add_argument("--static-selection-steps", type=int, default=256)
+    parser.add_argument("--static-selection-rollouts", type=int, default=4)
+    parser.add_argument("--eval-steps", type=int, default=256)
+    parser.add_argument("--eval-rollouts", type=int, default=4)
     parser.add_argument("--gpu-ids", nargs="*", default=[])
     parser.add_argument("--max-parallel", type=int, default=None)
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
@@ -126,6 +140,16 @@ def build_commands(args: argparse.Namespace) -> list[CommandItem]:
                 sensor_cfg=str(args.sensor_cfg),
                 oracle_device=str(args.oracle_device),
                 bc_device=str(args.bc_device),
+                budget=float(args.budget),
+                startup_peak_budget=float(args.startup_peak_budget),
+                energy_capacity=float(args.energy_capacity),
+                harvest_per_step=float(args.harvest_per_step),
+                train_steps=int(args.train_steps),
+                train_rollouts=int(args.train_rollouts),
+                static_selection_steps=int(args.static_selection_steps),
+                static_selection_rollouts=int(args.static_selection_rollouts),
+                eval_steps=int(args.eval_steps),
+                eval_rollouts=int(args.eval_rollouts),
                 include_rule_baselines=bool(args.include_rule_baselines),
             )
             commands.append(CommandItem(command=command, out_dir=out_dir, log_path=out_dir / "run.log", env=env))
@@ -143,6 +167,16 @@ def base_command(
     sensor_cfg: str,
     oracle_device: str,
     bc_device: str,
+    budget: float,
+    startup_peak_budget: float,
+    energy_capacity: float,
+    harvest_per_step: float,
+    train_steps: int,
+    train_rollouts: int,
+    static_selection_steps: int,
+    static_selection_rollouts: int,
+    eval_steps: int,
+    eval_rollouts: int,
     include_rule_baselines: bool,
 ) -> list[str]:
     common = [
@@ -178,30 +212,30 @@ def base_command(
         "--horizon",
         "8",
         "--train-steps",
-        "128",
+        str(int(train_steps)),
         "--train-rollouts",
-        "4",
+        str(int(train_rollouts)),
         "--static-selection-steps",
-        "256",
+        str(int(static_selection_steps)),
         "--static-selection-rollouts",
-        "4",
+        str(int(static_selection_rollouts)),
         "--eval-steps",
-        "256",
+        str(int(eval_steps)),
         "--eval-rollouts",
-        "4",
+        str(int(eval_rollouts)),
         "--max-active",
         "4",
         "--budget",
-        "1.20",
+        f"{float(budget):.6g}",
         "--startup-peak-budget",
-        "1.60",
+        f"{float(startup_peak_budget):.6g}",
         "--energy-account",
         "--energy-capacity",
-        "180",
+        f"{float(energy_capacity):.6g}",
         "--initial-energy",
         "180",
         "--harvest-per-step",
-        "0.92",
+        f"{float(harvest_per_step):.6g}",
         "--reserve-energy",
         "20",
         "--lambda-warmup-abort",
@@ -259,6 +293,10 @@ def base_command(
         "oracle_context_safe",
         "value_residual_safe",
         "value_residual_no_dagger",
+        "learned_value_residual_safe",
+        "learned_ensemble_value_safe",
+        "learned_advantage_residual_safe",
+        "learned_advantage_residual_calib_safe",
         "cost_support6_safe",
         "no_dagger",
         "no_anchor_guard",
@@ -308,6 +346,10 @@ def base_command(
         "value_residual_safe",
         "value_residual_no_dagger",
         "value_residual_oracle_objective",
+        "learned_value_residual_safe",
+        "learned_ensemble_value_safe",
+        "learned_advantage_residual_safe",
+        "learned_advantage_residual_calib_safe",
         "cost_support6_safe",
     }:
         common.append("--bc-preserve-warming")
@@ -328,6 +370,10 @@ def base_command(
         "value_residual_safe": 5,
         "value_residual_no_dagger": 5,
         "value_residual_oracle_objective": 5,
+        "learned_value_residual_safe": 5,
+        "learned_ensemble_value_safe": 8,
+        "learned_advantage_residual_safe": 6,
+        "learned_advantage_residual_calib_safe": 6,
     }.get(preset, 0)
     common.extend(["--bc-action-support-top-k", str(support_top_k)])
     if preset == "support_calib_safe":
@@ -339,6 +385,10 @@ def base_command(
         "value_residual_safe",
         "value_residual_no_dagger",
         "value_residual_oracle_objective",
+        "learned_value_residual_safe",
+        "learned_ensemble_value_safe",
+        "learned_advantage_residual_safe",
+        "learned_advantage_residual_calib_safe",
     }:
         common.append("--no-include-bc-policy")
     else:
@@ -378,7 +428,12 @@ def base_command(
         common.append("--no-include-residual-bc-policy")
     if preset == "oracle_context_safe":
         common.append("--forecast-truth-future")
-    if preset in {"value_residual_safe", "value_residual_no_dagger", "value_residual_oracle_objective"}:
+    if preset in {
+        "value_residual_safe",
+        "value_residual_no_dagger",
+        "value_residual_oracle_objective",
+        "learned_value_residual_safe",
+    }:
         common.extend(
             [
                 "--include-value-residual-policy",
@@ -398,6 +453,70 @@ def base_command(
         )
     else:
         common.append("--no-include-value-residual-policy")
+    if preset == "learned_ensemble_value_safe":
+        common.extend(
+            [
+                "--include-ensemble-value-policy",
+                "--ensemble-value-support-top-k",
+                "8",
+                "--ensemble-value-size",
+                "5",
+                "--ensemble-value-beta-grid",
+                "0.0",
+                "0.25",
+                "0.5",
+                "1.0",
+                "--ensemble-value-advantage-grid",
+                "-0.5",
+                "-0.2",
+                "0.0",
+                "0.1",
+                "0.2",
+                "0.5",
+            ]
+        )
+    else:
+        common.append("--no-include-ensemble-value-policy")
+    if preset in {"learned_advantage_residual_safe", "learned_advantage_residual_calib_safe"}:
+        common.extend(
+            [
+                "--include-advantage-residual-policy",
+                "--advantage-residual-support-top-k",
+                "6",
+                "--advantage-residual-grid",
+                "-0.2",
+                "-0.1",
+                "0.0",
+                "0.05",
+                "0.1",
+                "0.2",
+                "0.35",
+                "0.5",
+                "0.8",
+                "1.0",
+            ]
+        )
+        if preset == "learned_advantage_residual_calib_safe":
+            common.extend(["--advantage-residual-support-grid", "3", "5", "6", "8", "12"])
+    else:
+        common.append("--no-include-advantage-residual-policy")
+    if preset in {
+        "learned_value_residual_safe",
+        "learned_ensemble_value_safe",
+        "learned_advantage_residual_safe",
+        "learned_advantage_residual_calib_safe",
+    }:
+        common.extend(
+            [
+                "--learned-event-forecast",
+                "--event-forecast-lookback",
+                "8",
+                "--event-forecast-hidden-dim",
+                "128",
+                "--event-forecast-epochs",
+                "40",
+            ]
+        )
     if preset in {"cost_safe", "cost_support6_safe"}:
         common.extend(["--include-cost-policy", "--cost-epochs", "50", "--cost-hidden-dim", "256"])
     else:

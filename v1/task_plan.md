@@ -8,8 +8,10 @@ PD-PPO failure modes: missing explicit forecast context, weak credit assignment,
 fixed penalty constraint handling, and lack of teacher guidance.
 
 ## Current Phase
-Phase 5f in progress: value-residual main claim and required ablations are
-complete; consolidating paper-ready tables and claims.
+Phase 6 in progress: strong-claim redesign. The weak value-residual result is
+not enough for the original paper claim, so the active mainline now replaces
+heuristic forecast context with a split-compliant learned event forecaster and
+will continue toward learned rollout-value / online planning.
 
 ## Minimum Claim Target
 - In strict chronological split protocol, the deployable forecast-aware DAgger
@@ -97,6 +99,43 @@ complete; consolidating paper-ready tables and claims.
 - [ ] Update manuscript only if strict static comparator is beaten robustly.
 - **Status:** in_progress
 
+## Phase 6: Strong-Claim Redesign
+- [x] Admit the current result is insufficient for the original strong claim:
+  small n=5 margin, no significance, no cross-setting generalization, and
+  DAgger not an active mechanism.
+- [x] Replace hand-coded causal event-risk features with a train-only learned
+  multi-horizon event forecaster. The learned forecaster writes causal
+  probability columns into the truth table, and all downstream teacher/cost/
+  deployable policies consume those columns through `ForecastContextConfig`.
+- [x] Add `learned_value_residual_safe` claim-suite preset.
+- [x] Run local real-seed smoke for the learned-forecast path.
+- [x] Run server n=5 learned-forecast candidate:
+  `v1_claim_learned_forecast_n5_20260601`. It repeated the weak `4/5`
+  pattern with a smaller mean margin and does not satisfy the original strong
+  claim.
+- [x] Add uncertainty-aware action-cost ensemble and online value planner.
+- [x] Run server n=5 learned-forecast + ensemble-value candidate:
+  `v1_claim_learned_ensemble_n5_20260601`. It failed at `3/5`, confirming that
+  uncertainty-aware absolute-cost ensembling is not the right main route.
+- [x] Add anchor-advantage residual policy: directly learns the candidate
+  advantage relative to the validation-selected static anchor instead of
+  subtracting two independently learned absolute costs.
+- [ ] Run server n=5 anchor-advantage residual candidate:
+  `v1_claim_learned_advantage_n5_20260601`. The first launch exposed two
+  non-result failures: seed42 hit server disk exhaustion, and seed45 exposed an
+  anchor projection bug in advantage-data collection.
+- [x] Add validation-calibrated anchor-advantage support selection:
+  `learned_advantage_residual_calib_safe`.
+- [x] Fix anchor-default semantics so residual policies and advantage-data
+  collection treat the validation-selected static anchor as a mask submitted to
+  the environment projector, not as an action that must be exactly feasible at
+  every warmup state.
+- [ ] Run corrected calibrated n=5 candidate:
+  `v1_claim_learned_advantage_calib_anchorfix_n5_20260601`.
+- [ ] Scale the final strong candidate beyond the old n=5 single-setting gate:
+  more seeds, at least two budgets, and at least one event-regime perturbation.
+- **Status:** in_progress
+
 ## Error Log
 | Time | Error | Resolution |
 |---|---|---|
@@ -107,3 +146,4 @@ complete; consolidating paper-ready tables and claims.
 | 2026-05-27 | Oracle-only objective does not value event transport enough for dynamic sensing | Added task-composite objective and event-transport task error |
 | 2026-05-27 | BC fitted teacher labels but failed rollout gate | Added one-iteration DAgger; medium seed-41 gate passed |
 | 2026-05-27 | Action-cost policy minimized over OOD feasible masks and dropped core context sensors | Added teacher-label action-support guard plus static-anchor inclusion for deployable policies |
+| 2026-06-01 | Anchor-advantage fixed-support run produced non-result failures: seed42 disk full and seed45 empty advantage rows | Cleaned server caches, stopped old runs, fixed anchor projection semantics, added regression tests, and relaunched calibrated anchorfix suite |

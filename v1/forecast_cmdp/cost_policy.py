@@ -6,7 +6,14 @@ from typing import Any
 import numpy as np
 
 from .features import ForecastContextConfig, append_event_forecast, build_event_forecast
-from .mpc_teacher import MpcTeacherConfig, beam_search_first_action_costs, beam_search_teacher_action
+from .mpc_teacher import (
+    MpcTeacherConfig,
+    _rollout_repeated_mask_cost,
+    beam_search_first_action_costs,
+    beam_search_teacher_action,
+    restore_env,
+    snapshot_env,
+)
 from .reuse import ensure_archive_src
 
 ensure_archive_src()
@@ -25,6 +32,8 @@ class ActionCostTrainingConfig:
     weight_decay: float = 1.0e-4
     seed: int = 42
     device: str = "auto"
+    ensemble_size: int = 1
+    bootstrap_fraction: float = 0.85
 
 
 @dataclass
@@ -33,6 +42,15 @@ class ActionCostDataset:
     costs: np.ndarray
     feature_dim: int
     n_sensors: int
+
+
+@dataclass
+class AnchorAdvantageDataset:
+    inputs: np.ndarray
+    advantages: np.ndarray
+    feature_dim: int
+    n_sensors: int
+    anchor_idx: int
 
 
 def collect_action_cost_dataset(
@@ -79,6 +97,82 @@ def collect_action_cost_dataset(
     )
 
 
+def collect_anchor_advantage_dataset(
+    env: WarmupSchedulingEnv,
+    candidate_masks: np.ndarray,
+    *,
+    anchor_mask: tuple[bool, ...] | np.ndarray,
+    start_indices: tuple[int, ...],
+    steps_per_start: int,
+    teacher_cfg: MpcTeacherConfig,
+    forecast_cfg: ForecastContextConfig,
+) -> AnchorAdvantageDataset:
+    masks = np.asarray(candidate_masks, dtype=bool)
+    anchor = np.asarray(anchor_mask, dtype=bool).reshape(-1)
+    anchor_idx = _candidate_index(masks, anchor)
+    if anchor_idx is None:
+        raise ValueError("Anchor mask is not present in candidate_masks")
+    anchor_features = anchor.astype(np.float32)
+    rows: list[np.ndarray] = []
+    advantages_out: list[float] = []
+    feature_dim: int | None = None
+    for start_idx in start_indices:
+        env.reset(start_idx=int(start_idx))
+        for _ in range(int(steps_per_start)):
+            forecast = build_event_forecast(env.truth_df, int(env.current_idx), forecast_cfg)
+            feature = append_event_forecast(env._state().astype(np.float32), forecast)
+            feature_dim = int(feature.shape[0])
+            costs = beam_search_first_action_costs(env, masks, teacher_cfg)
+            finite = np.flatnonzero(np.isfinite(costs))
+            anchor_cost = _anchor_rollout_cost(env, anchor, masks, teacher_cfg)
+            if np.isfinite(anchor_cost):
+                scale_values = costs[finite].astype(float) if finite.size else np.asarray([], dtype=float)
+                scale_values = np.concatenate([scale_values, np.asarray([float(anchor_cost)], dtype=float)])
+                spread = float(np.std(scale_values))
+                scale = spread if spread > 1.0e-6 else 1.0
+                for action_idx in finite:
+                    action_features = masks[int(action_idx)].astype(np.float32)
+                    advantage = 0.0 if int(action_idx) == int(anchor_idx) else (anchor_cost - float(costs[int(action_idx)])) / scale
+                    rows.append(
+                        np.concatenate(
+                            [
+                                feature,
+                                action_features,
+                                anchor_features,
+                                action_features - anchor_features,
+                            ],
+                            axis=0,
+                        ).astype(np.float32)
+                    )
+                    advantages_out.append(float(advantage))
+                if not np.any(finite == int(anchor_idx)):
+                    rows.append(
+                        np.concatenate(
+                            [
+                                feature,
+                                anchor_features,
+                                anchor_features,
+                                np.zeros_like(anchor_features),
+                            ],
+                            axis=0,
+                        ).astype(np.float32)
+                    )
+                    advantages_out.append(0.0)
+            action = beam_search_teacher_action(env, masks, teacher_cfg)
+            _, _, done, _ = env.step_mask(action)
+            if done:
+                break
+    if not rows or feature_dim is None:
+        raise ValueError("No anchor-advantage rows were collected")
+    return AnchorAdvantageDataset(
+        inputs=np.vstack(rows).astype(np.float32),
+        advantages=np.asarray(advantages_out, dtype=np.float32),
+        feature_dim=int(feature_dim),
+        n_sensors=int(masks.shape[1]),
+        anchor_idx=int(anchor_idx),
+    )
+
+
 def train_action_cost_model(dataset: ActionCostDataset, cfg: ActionCostTrainingConfig) -> tuple[Any, dict[str, list[float]]]:
     torch, nn, DataLoader, TensorDataset = _torch_modules()
     x = np.asarray(dataset.inputs, dtype=np.float32)
@@ -110,6 +204,80 @@ def train_action_cost_model(dataset: ActionCostDataset, cfg: ActionCostTrainingC
             losses.append(float(loss.detach().cpu().item()))
         history["loss"].append(float(np.mean(losses)) if losses else float("nan"))
     return model.eval(), history
+
+
+def train_anchor_advantage_model(
+    dataset: AnchorAdvantageDataset,
+    cfg: ActionCostTrainingConfig,
+) -> tuple[Any, dict[str, list[float]]]:
+    torch, nn, DataLoader, TensorDataset = _torch_modules()
+    x = np.asarray(dataset.inputs, dtype=np.float32)
+    y = np.asarray(dataset.advantages, dtype=np.float32).reshape(-1, 1)
+    device = _select_device(torch, str(cfg.device))
+    torch.manual_seed(int(cfg.seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(cfg.seed))
+    model = ActionCostNet(input_dim=x.shape[1], hidden_dim=int(cfg.hidden_dim)).to(device)
+    loader = DataLoader(
+        TensorDataset(torch.as_tensor(x, dtype=torch.float32), torch.as_tensor(y, dtype=torch.float32)),
+        batch_size=max(1, int(cfg.batch_size)),
+        shuffle=True,
+        drop_last=False,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg.learning_rate), weight_decay=float(cfg.weight_decay))
+    history = {"loss": []}
+    for _ in range(int(cfg.epochs)):
+        losses: list[float] = []
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            pred = model(xb)
+            loss = nn.functional.mse_loss(pred, yb)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            losses.append(float(loss.detach().cpu().item()))
+        history["loss"].append(float(np.mean(losses)) if losses else float("nan"))
+    return model.eval(), history
+
+
+def train_action_cost_ensemble(
+    dataset: ActionCostDataset,
+    cfg: ActionCostTrainingConfig,
+) -> tuple[list[Any], list[dict[str, list[float]]]]:
+    size = max(1, int(cfg.ensemble_size))
+    if size == 1:
+        model, history = train_action_cost_model(dataset, cfg)
+        return [model], [history]
+    rng = np.random.default_rng(int(cfg.seed))
+    n = int(dataset.inputs.shape[0])
+    sample_size = max(1, int(round(float(cfg.bootstrap_fraction) * float(n))))
+    models: list[Any] = []
+    histories: list[dict[str, list[float]]] = []
+    for member in range(size):
+        ids = rng.integers(0, n, size=sample_size, endpoint=False)
+        member_dataset = ActionCostDataset(
+            inputs=np.asarray(dataset.inputs[ids], dtype=np.float32),
+            costs=np.asarray(dataset.costs[ids], dtype=np.float32),
+            feature_dim=int(dataset.feature_dim),
+            n_sensors=int(dataset.n_sensors),
+        )
+        member_cfg = ActionCostTrainingConfig(
+            hidden_dim=int(cfg.hidden_dim),
+            epochs=int(cfg.epochs),
+            batch_size=int(cfg.batch_size),
+            learning_rate=float(cfg.learning_rate),
+            weight_decay=float(cfg.weight_decay),
+            seed=int(cfg.seed) + 997 * int(member + 1),
+            device=str(cfg.device),
+            ensemble_size=1,
+            bootstrap_fraction=float(cfg.bootstrap_fraction),
+        )
+        model, history = train_action_cost_model(member_dataset, member_cfg)
+        models.append(model)
+        histories.append(history)
+    return models, histories
 
 
 class ActionCostNet:
@@ -241,10 +409,9 @@ class ForecastAwareValueResidualPolicy(V2Policy):
         valid = feasible_candidate_mask(env, self.candidate_masks)
         valid = self._apply_allowed_actions(valid)
         valid = self._apply_warming_preservation(env, valid)
-        anchor_valid = self.anchor_idx is not None and bool(valid[int(self.anchor_idx)])
         valid_ids = np.flatnonzero(valid)
         if valid_ids.size == 0:
-            return self.anchor_mask_arr.astype(bool).copy() if anchor_valid else np.zeros(self.candidate_masks.shape[1], dtype=bool)
+            return self.anchor_mask_arr.astype(bool).copy()
         rows = [
             np.concatenate([feature, self.candidate_masks[int(action_idx)].astype(np.float32)], axis=0)
             for action_idx in valid_ids
@@ -254,14 +421,212 @@ class ForecastAwareValueResidualPolicy(V2Policy):
             costs = self.model(x).reshape(-1).detach().cpu().numpy().astype(float)
         best_local = int(np.argmin(costs))
         best_idx = int(valid_ids[best_local])
-        if anchor_valid:
-            anchor_positions = np.flatnonzero(valid_ids == int(self.anchor_idx))
-            if anchor_positions.size:
-                anchor_cost = float(costs[int(anchor_positions[0])])
-                best_cost = float(costs[best_local])
-                advantage = anchor_cost - best_cost
-                if advantage <= float(self.advantage_threshold):
-                    return self.anchor_mask_arr.astype(bool).copy()
+        anchor_cost = _predict_single_action_cost(
+            self.model,
+            feature=feature,
+            action_features=self.anchor_mask_arr.astype(np.float32),
+            device_obj=self.device_obj,
+            torch=torch,
+        )
+        best_cost = float(costs[best_local])
+        advantage = anchor_cost - best_cost
+        if best_idx == self.anchor_idx or advantage <= float(self.advantage_threshold):
+            return self.anchor_mask_arr.astype(bool).copy()
+        return self.candidate_masks[best_idx].astype(bool).copy()
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _apply_warming_preservation(self, env: WarmupSchedulingEnv, valid: np.ndarray) -> np.ndarray:
+        if not bool(self.preserve_warming):
+            return np.asarray(valid, dtype=bool)
+        required = np.asarray(
+            [
+                str(env.runtimes[sid].mode.name).lower() == "warming" and int(env.runtimes[sid].warm_remaining) > 0
+                for sid in env.sensor_ids
+            ],
+            dtype=bool,
+        )
+        if not np.any(required):
+            return np.asarray(valid, dtype=bool)
+        keep_warming = np.all(self.candidate_masks[:, required], axis=1)
+        guarded = np.asarray(valid, dtype=bool) & keep_warming
+        if np.any(guarded):
+            return guarded
+        return np.asarray(valid, dtype=bool)
+
+    def _apply_allowed_actions(self, valid: np.ndarray) -> np.ndarray:
+        allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
+        if np.any(allowed):
+            return allowed
+        return np.asarray(valid, dtype=bool)
+
+
+@dataclass
+class ForecastAwareEnsembleValuePolicy(V2Policy):
+    models: list[Any]
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    anchor_mask: tuple[bool, ...] | np.ndarray
+    device: str = "auto"
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
+    advantage_threshold: float = 0.0
+    uncertainty_beta: float = 0.0
+    preserve_warming: bool = True
+    name: str = "forecast_aware_ensemble_value"
+
+    def __post_init__(self) -> None:
+        torch, _, _, _ = _torch_modules()
+        self.device_obj = _select_device(torch, str(self.device))
+        self.models = list(self.models)
+        if not self.models:
+            raise ValueError("ForecastAwareEnsembleValuePolicy requires at least one model")
+        for model in self.models:
+            model.to(self.device_obj)
+            model.eval()
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
+        self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
+        if self.anchor_idx is not None:
+            self.allowed_action_mask[int(self.anchor_idx)] = True
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        state = env._state().astype(np.float32)
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        feature = append_event_forecast(state, forecast)
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        valid = self._apply_allowed_actions(valid)
+        valid = self._apply_warming_preservation(env, valid)
+        valid_ids = np.flatnonzero(valid)
+        if valid_ids.size == 0:
+            return self.anchor_mask_arr.astype(bool).copy()
+        rows = [
+            np.concatenate([feature, self.candidate_masks[int(action_idx)].astype(np.float32)], axis=0)
+            for action_idx in valid_ids
+        ]
+        with torch.no_grad():
+            x = torch.as_tensor(np.vstack(rows).astype(np.float32), dtype=torch.float32, device=self.device_obj)
+            preds = [
+                model(x).reshape(-1).detach().cpu().numpy().astype(float)
+                for model in self.models
+            ]
+        pred = np.vstack(preds).astype(float)
+        mean = np.mean(pred, axis=0)
+        std = np.std(pred, axis=0)
+        score = mean + float(self.uncertainty_beta) * std
+        best_local = int(np.argmin(score))
+        best_idx = int(valid_ids[best_local])
+        anchor_preds = _predict_single_action_ensemble_costs(
+            self.models,
+            feature=feature,
+            action_features=self.anchor_mask_arr.astype(np.float32),
+            device_obj=self.device_obj,
+            torch=torch,
+        )
+        anchor_score = float(np.mean(anchor_preds) + float(self.uncertainty_beta) * np.std(anchor_preds))
+        best_score = float(score[best_local])
+        advantage = anchor_score - best_score
+        if best_idx == self.anchor_idx or advantage <= float(self.advantage_threshold):
+            return self.anchor_mask_arr.astype(bool).copy()
+        return self.candidate_masks[best_idx].astype(bool).copy()
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _apply_warming_preservation(self, env: WarmupSchedulingEnv, valid: np.ndarray) -> np.ndarray:
+        if not bool(self.preserve_warming):
+            return np.asarray(valid, dtype=bool)
+        required = np.asarray(
+            [
+                str(env.runtimes[sid].mode.name).lower() == "warming" and int(env.runtimes[sid].warm_remaining) > 0
+                for sid in env.sensor_ids
+            ],
+            dtype=bool,
+        )
+        if not np.any(required):
+            return np.asarray(valid, dtype=bool)
+        keep_warming = np.all(self.candidate_masks[:, required], axis=1)
+        guarded = np.asarray(valid, dtype=bool) & keep_warming
+        if np.any(guarded):
+            return guarded
+        return np.asarray(valid, dtype=bool)
+
+    def _apply_allowed_actions(self, valid: np.ndarray) -> np.ndarray:
+        allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
+        if np.any(allowed):
+            return allowed
+        return np.asarray(valid, dtype=bool)
+
+
+@dataclass
+class ForecastAwareAdvantageResidualPolicy(V2Policy):
+    model: Any
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    anchor_mask: tuple[bool, ...] | np.ndarray
+    device: str = "auto"
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
+    advantage_threshold: float = 0.0
+    preserve_warming: bool = True
+    name: str = "forecast_aware_advantage_residual"
+
+    def __post_init__(self) -> None:
+        torch, _, _, _ = _torch_modules()
+        self.device_obj = _select_device(torch, str(self.device))
+        self.model.to(self.device_obj)
+        self.model.eval()
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
+        self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
+        if self.anchor_idx is not None:
+            self.allowed_action_mask[int(self.anchor_idx)] = True
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        state = env._state().astype(np.float32)
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        feature = append_event_forecast(state, forecast)
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        valid = self._apply_allowed_actions(valid)
+        valid = self._apply_warming_preservation(env, valid)
+        valid_ids = np.flatnonzero(valid)
+        if valid_ids.size == 0:
+            return self.anchor_mask_arr.astype(bool).copy()
+        anchor_features = self.anchor_mask_arr.astype(np.float32)
+        rows = []
+        for action_idx in valid_ids:
+            action_features = self.candidate_masks[int(action_idx)].astype(np.float32)
+            rows.append(
+                np.concatenate(
+                    [
+                        feature,
+                        action_features,
+                        anchor_features,
+                        action_features - anchor_features,
+                    ],
+                    axis=0,
+                )
+            )
+        with torch.no_grad():
+            x = torch.as_tensor(np.vstack(rows).astype(np.float32), dtype=torch.float32, device=self.device_obj)
+            advantages = self.model(x).reshape(-1).detach().cpu().numpy().astype(float)
+        best_local = int(np.argmax(advantages))
+        best_idx = int(valid_ids[best_local])
+        if best_idx == self.anchor_idx:
+            return self.anchor_mask_arr.astype(bool).copy()
+        if float(advantages[best_local]) <= float(self.advantage_threshold):
+            return self.anchor_mask_arr.astype(bool).copy()
         return self.candidate_masks[best_idx].astype(bool).copy()
 
     def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
@@ -299,6 +664,56 @@ def _torch_modules() -> tuple[Any, Any, Any, Any]:
     from torch.utils.data import DataLoader, TensorDataset
 
     return torch, nn, DataLoader, TensorDataset
+
+
+def _anchor_rollout_cost(
+    env: WarmupSchedulingEnv,
+    anchor: np.ndarray,
+    candidate_masks: np.ndarray,
+    teacher_cfg: MpcTeacherConfig,
+) -> float:
+    snapshot = snapshot_env(env)
+    try:
+        return float(
+            _rollout_repeated_mask_cost(
+                env,
+                np.asarray(anchor, dtype=bool).reshape(-1),
+                max(1, int(teacher_cfg.planning_horizon)),
+                np.asarray(candidate_masks, dtype=bool),
+                teacher_cfg,
+            )
+        )
+    finally:
+        restore_env(env, snapshot)
+
+
+def _predict_single_action_cost(
+    model: Any,
+    *,
+    feature: np.ndarray,
+    action_features: np.ndarray,
+    device_obj: Any,
+    torch: Any,
+) -> float:
+    row = np.concatenate([feature, action_features], axis=0).astype(np.float32)
+    with torch.no_grad():
+        x = torch.as_tensor(row.reshape(1, -1), dtype=torch.float32, device=device_obj)
+        return float(model(x).reshape(-1).detach().cpu().numpy()[0])
+
+
+def _predict_single_action_ensemble_costs(
+    models: list[Any],
+    *,
+    feature: np.ndarray,
+    action_features: np.ndarray,
+    device_obj: Any,
+    torch: Any,
+) -> np.ndarray:
+    row = np.concatenate([feature, action_features], axis=0).astype(np.float32)
+    with torch.no_grad():
+        x = torch.as_tensor(row.reshape(1, -1), dtype=torch.float32, device=device_obj)
+        preds = [float(model(x).reshape(-1).detach().cpu().numpy()[0]) for model in models]
+    return np.asarray(preds, dtype=float)
 
 
 def _select_device(torch: Any, requested: str) -> Any:

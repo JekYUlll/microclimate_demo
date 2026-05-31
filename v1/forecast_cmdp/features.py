@@ -19,6 +19,7 @@ class ForecastContextConfig:
     wind_threshold_ms: float = 8.0
     wind_scale_ms: float = 1.5
     truth_future: bool = False
+    learned_event_probability_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,9 @@ def build_event_forecast(
     if bool(cfg.truth_future):
         probabilities = _future_truth_event_probabilities(truth, idx, horizon, cfg.event_column)
         confidence = np.ones(horizon, dtype=np.float32)
+    elif cfg.learned_event_probability_columns:
+        probabilities = _learned_event_probabilities(truth, idx, horizon, cfg.learned_event_probability_columns)
+        confidence = np.clip(np.abs(probabilities - 0.5) * 2.0, 0.0, 1.0).astype(np.float32)
     else:
         probabilities = _causal_event_probabilities(truth, idx, horizon, cfg)
         confidence = np.clip(np.abs(probabilities - 0.5) * 2.0, 0.0, 1.0).astype(np.float32)
@@ -104,6 +108,25 @@ def _future_truth_event_probabilities(
     if window.size < horizon:
         window = np.pad(window, (0, horizon - window.size), constant_values=0.0)
     return window.astype(np.float32)
+
+
+def _learned_event_probabilities(
+    truth: pd.DataFrame,
+    current_idx: int,
+    horizon: int,
+    probability_columns: tuple[str, ...],
+) -> np.ndarray:
+    values: list[float] = []
+    row = truth.iloc[int(current_idx)] if len(truth) else None
+    for column in tuple(str(x) for x in probability_columns)[: int(horizon)]:
+        if row is None or column not in truth.columns:
+            values.append(0.0)
+            continue
+        value = float(row[column])
+        values.append(value if np.isfinite(value) else 0.0)
+    if len(values) < int(horizon):
+        values.extend([0.0] * (int(horizon) - len(values)))
+    return np.clip(np.asarray(values, dtype=np.float32), 0.0, 1.0)
 
 
 def _causal_event_probabilities(

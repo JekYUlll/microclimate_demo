@@ -523,3 +523,137 @@
 - Added `v1/docs/claim_results_2026-06-01.md` as the paper-ready claim note.
   It records the main n=5 result, value-residual-specific ablations, behavior
   diagnostics, paper-safe claims, and claims to avoid.
+
+## 2026-06-01 Strong-Claim Redesign
+- User correctly rejected the weak-result stopping point: current n=5
+  value-residual evidence does not implement the original strong claim.
+- Started Phase 6 as a real redesign rather than another threshold tweak.
+  Implemented a split-compliant learned multi-horizon event forecaster in
+  `v1/forecast_cmdp/event_forecaster.py`.
+- Extended `ForecastContextConfig` with
+  `learned_event_probability_columns`. `build_event_forecast` now prefers those
+  learned probability columns over the old wind-speed heuristic when provided.
+- Integrated the learned forecaster into `run_protocol_gate.py` behind
+  `--learned-event-forecast`. It trains only on data before validation
+  (`oracle_pretrain` through `rl_train`) and injects learned forecast columns
+  before teacher dataset collection, action-cost training, validation
+  calibration, and final-test evaluation.
+- Added `learned_value_residual_safe` preset to `run_claim_suite.py`.
+- Added tests for learned forecast column consumption and end-to-end forecaster
+  augmentation. Local verification: `py_compile` passed; core tests now report
+  `12 passed`.
+- Ran a small real-seed smoke at `/tmp/v1_learned_smoke_seed41`. It confirmed
+  the new path trains a learned forecaster, injects `learned_event_p_h*`
+  columns, collects teacher and cost data, calibrates value-residual, and
+  evaluates final policies. The smoke is not claim evidence because it uses
+  tiny windows where even the teacher loses to static.
+- Synced updated `v1/` source to the GPU server and launched tmux
+  `v1_claim_learned_forecast_n5_20260601`:
+  preset `learned_value_residual_safe`, seeds `41--45`, max parallel `5`, no
+  rule baselines. Output root:
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_forecast`.
+- Implemented the next strong-mainline fallback: uncertainty-aware
+  action-cost ensemble. Added `train_action_cost_ensemble` and
+  `ForecastAwareEnsembleValuePolicy`, plus validation calibration over
+  uncertainty beta and anchor-deviation threshold. Added suite preset
+  `learned_ensemble_value_safe`, which combines the learned event forecaster
+  with an ensemble value planner instead of the single-head value-residual
+  policy.
+- Local verification after ensemble implementation: `py_compile` passed,
+  dry-run for `learned_ensemble_value_safe` generated the expected command, and
+  core tests now report `13 passed`.
+- Added budget override options to `run_claim_suite.py` so strong candidates can
+  be scaled across constraint budgets without regenerating truth/oracle inputs.
+- Synced ensemble and budget-override code to the GPU server. Remote
+  `py_compile` passed.
+- Because `learned_value_residual_safe` was still in static candidate selection
+  and server CPU headroom was large, launched the stronger ensemble candidate in
+  parallel: tmux `v1_claim_learned_ensemble_n5_20260601`, preset
+  `learned_ensemble_value_safe`, seeds `41--45`, output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_ensemble`.
+- Added `v1/scripts/run_budget_matrix.py`, a launcher that runs one strong
+  candidate across multiple budget constraints while reusing the same
+  semimarkov truth/oracle inputs. This prepares the stronger cross-budget
+  evidence required for the original claim.
+- 2026-06-01 01:11 CST: server status check shows `0/5` summaries for
+  `learned_value_residual_safe` and `0/5` for `learned_ensemble_value_safe`.
+  The learned-value run has reached DAgger collection; the ensemble run has
+  reached validation static candidate selection. Both tmux sessions are alive.
+- 2026-06-01 07:24 CST: both learned candidates completed. Aggregated results:
+  `learned_value_residual_safe` repeated the weak gate (`4/5`, mean deployable
+  margin `+0.001856`, teacher `5/5`, sign-test `p=0.375`), while
+  `learned_ensemble_value_safe` failed (`3/5`, mean deployable margin
+  `-0.003409`, teacher `5/5`). Results and behavior diagnostics were synced
+  locally under their respective `v1/artifacts/claim_suite_semimarkov_n5_*`
+  directories.
+- Implemented the next deployable correction:
+  `ForecastAwareAdvantageResidualPolicy`. It trains an anchor-relative
+  advantage regressor from short-horizon teacher costs
+  (`cost(validation_static_anchor) - cost(candidate)`) and deploys only when
+  the predicted advantage clears a validation-calibrated threshold.
+- Added `collect_anchor_advantage_dataset`, `train_anchor_advantage_model`,
+  `--include-advantage-residual-policy`, and the
+  `learned_advantage_residual_safe` claim-suite preset.
+- Local verification after the anchor-advantage implementation:
+  `python -m py_compile v1/forecast_cmdp/*.py v1/scripts/*.py
+  v1/tests/test_forecast_cmdp_core.py` passed; `conda run -n darts python -m
+  pytest -q v1/tests/test_forecast_cmdp_core.py` reports `14 passed`.
+- Launched server tmux `v1_claim_learned_advantage_n5_20260601` for preset
+  `learned_advantage_residual_safe`, seeds `41--45`, output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_advantage`.
+- Added `learned_advantage_residual_calib_safe`, which calibrates both
+  teacher-label support size (`top_k` grid `3/5/6/8/12`) and predicted
+  advantage threshold on validation. This is prepared as the immediate fallback
+  if the fixed-support advantage run does not materially improve the margin.
+- Local verification after support-grid calibration: `py_compile` passed,
+  dry-run command generation passed, and core tests still report `14 passed`.
+- Added claim-suite protocol-size overrides (`--train-steps`,
+  `--train-rollouts`, `--static-selection-*`, `--eval-*`) so the next run can
+  scale data/calibration windows without another source edit. Dry-run verified
+  a wider calibrated advantage command with 6 train/validation/final rollouts.
+- Extended `run_budget_matrix.py` to pass the same protocol-size overrides into
+  each budget sub-run. Dry-run verified budget-matrix command generation for
+  calibrated advantage with wider rollout counts.
+- Removed `pandas.to_markdown()` from `aggregate_budget_matrix.py` so budget
+  aggregation does not depend on optional `tabulate`. A temp symlink smoke with
+  one completed seed verified `budget_matrix_assessment` generation.
+- Because the server had ample CPU headroom while fixed support was still in
+  validation static selection, launched calibrated support in parallel:
+  tmux `v1_claim_learned_advantage_calib_n5_20260601`, preset
+  `learned_advantage_residual_calib_safe`, seeds `41--45`, output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_advantage_calib`.
+- Runtime issue: fixed-support seed42 hit `OSError: [Errno 28] No space left on
+  device` while saving DAgger data. Root cause was a full server root partition;
+  v1 artifacts were only ~471MB, so this was not caused by the current run.
+  Cleaned user-level reusable caches (`~/.cache/pip`, `~/conda_pkgs_cache`,
+  `~/.cache/pyright-python`, plus `conda clean -a`) and recovered ~9.3GB free.
+  The fixed-support suite will need seed42 rerun after the current jobs finish;
+  calibrated suite had no disk error at the time of check.
+- 2026-06-01 07:49 CST: fixed-support seed45 also failed before producing a
+  claim result: `collect_anchor_advantage_dataset` raised
+  `ValueError: No anchor-advantage rows were collected`. Diagnosis: the
+  validation-selected static anchor can be projected by startup/warmup
+  constraints at a training state, but the advantage collector required the
+  exact raw anchor candidate to have finite first-action beam-search cost. That
+  was inconsistent with the static comparator, which submits the anchor mask and
+  lets the environment projector execute it.
+- Implemented the anchor semantic fix in `v1/forecast_cmdp/cost_policy.py`.
+  Anchor-advantage labels now use a repeated-anchor rollout cost as the
+  baseline, add a zero-advantage anchor row even when the exact anchor is
+  projected, and residual policies can fall back to the anchor mask whenever
+  predicted advantage is below threshold. This also fixes the same fallback
+  issue in the absolute value-residual and ensemble-value policies.
+- Added regression tests for projected-anchor advantage collection and
+  projected-anchor fallback. Local verification:
+  `python -m py_compile v1/forecast_cmdp/*.py v1/scripts/*.py
+  v1/tests/test_forecast_cmdp_core.py` passed, and
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reports `16 passed`.
+- Stopped the old fixed-support and pre-fix calibrated tmux sessions because
+  their outputs would mix the wrong anchor semantics. Synced the fixed `v1/`
+  tree to the server; remote `py_compile` and remote core tests also report
+  `16 passed`.
+- Relaunched the corrected calibrated anchor-advantage candidate:
+  tmux `v1_claim_learned_advantage_calib_anchorfix_n5_20260601`, preset
+  `learned_advantage_residual_calib_safe`, seeds `41--45`, output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_advantage_calib_anchorfix`.

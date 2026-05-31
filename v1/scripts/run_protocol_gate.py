@@ -29,12 +29,24 @@ from forecast_cmdp.archived_v2 import (
 )
 from forecast_cmdp.cost_policy import (
     ActionCostTrainingConfig,
+    ForecastAwareAdvantageResidualPolicy,
     ForecastAwareCostPolicy,
+    ForecastAwareEnsembleValuePolicy,
     ForecastAwareValueResidualPolicy,
+    collect_anchor_advantage_dataset,
     collect_action_cost_dataset,
+    train_anchor_advantage_model,
+    train_action_cost_ensemble,
     train_action_cost_model,
 )
 from forecast_cmdp.dataset import collect_dagger_dataset, collect_teacher_dataset, concat_teacher_datasets
+from forecast_cmdp.event_forecaster import (
+    EventForecasterTrainingConfig,
+    augment_truth_with_event_forecasts,
+    build_event_forecast_dataset,
+    select_event_forecast_columns,
+    train_event_forecaster,
+)
 from forecast_cmdp.features import ForecastContextConfig
 from forecast_cmdp.mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, enumerate_action_masks
 from forecast_cmdp.policy import (
@@ -85,6 +97,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--selection-stride", type=int, default=64)
     parser.add_argument("--event-column", default="event_flag")
     parser.add_argument("--forecast-truth-future", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--learned-event-forecast", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--event-forecast-lookback", type=int, default=8)
+    parser.add_argument("--event-forecast-hidden-dim", type=int, default=128)
+    parser.add_argument("--event-forecast-epochs", type=int, default=40)
+    parser.add_argument("--event-forecast-batch-size", type=int, default=256)
+    parser.add_argument("--event-forecast-learning-rate", type=float, default=1.0e-3)
+    parser.add_argument("--event-forecast-weight-decay", type=float, default=1.0e-4)
+    parser.add_argument("--event-forecast-feature-columns", nargs="*", default=[])
+    parser.add_argument("--event-forecast-probability-prefix", default="learned_event_p")
     parser.add_argument("--lookback", type=int, default=20)
     parser.add_argument("--horizon", type=int, default=8)
     parser.add_argument("--objective-mode", choices=["oracle", "task_composite"], default="oracle")
@@ -168,12 +189,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--knn-k", type=int, default=5)
     parser.add_argument("--include-cost-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--include-value-residual-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--include-ensemble-value-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--include-advantage-residual-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--value-residual-support-top-k", type=int, default=5)
     parser.add_argument(
         "--value-residual-advantage-grid",
         nargs="*",
         type=float,
         default=[-1.0, -0.5, -0.2, -0.1, 0.0, 0.1, 0.2, 0.5, 1.0],
+    )
+    parser.add_argument("--ensemble-value-support-top-k", type=int, default=8)
+    parser.add_argument("--ensemble-value-size", type=int, default=5)
+    parser.add_argument("--ensemble-value-bootstrap-fraction", type=float, default=0.85)
+    parser.add_argument("--ensemble-value-beta-grid", nargs="*", type=float, default=[0.0, 0.25, 0.5, 1.0])
+    parser.add_argument("--ensemble-value-advantage-grid", nargs="*", type=float, default=[-0.5, -0.2, 0.0, 0.1, 0.2, 0.5])
+    parser.add_argument("--advantage-residual-support-top-k", type=int, default=6)
+    parser.add_argument("--advantage-residual-support-grid", nargs="*", type=int, default=[])
+    parser.add_argument(
+        "--advantage-residual-grid",
+        nargs="*",
+        type=float,
+        default=[-0.2, -0.1, 0.0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.8, 1.0],
     )
     parser.add_argument("--cost-epochs", type=int, default=50)
     parser.add_argument("--cost-hidden-dim", type=int, default=256)
@@ -203,6 +239,55 @@ def main() -> None:
     state_columns = tuple(str(name) for name in helpers.STATE_COLUMNS)
     reward_target_columns = tuple(str(name) for name in helpers.REWARD_TARGET_COLUMNS)
     bounds = partition_bounds(len(truth), tuple(float(x) for x in args.split_ratios))
+    learned_event_probability_columns: tuple[str, ...] = ()
+    event_forecaster_summary: dict[str, object] | None = None
+    if bool(args.learned_event_forecast):
+        log("training split-compliant learned event forecaster")
+        event_feature_columns = select_event_forecast_columns(
+            truth,
+            preferred_columns=tuple(str(x) for x in args.event_forecast_feature_columns) or state_columns,
+            event_column=str(args.event_column),
+        )
+        event_forecast_cfg = EventForecasterTrainingConfig(
+            horizon=int(args.horizon),
+            lookback=int(args.event_forecast_lookback),
+            event_column=str(args.event_column),
+            hidden_dim=int(args.event_forecast_hidden_dim),
+            epochs=int(args.event_forecast_epochs),
+            batch_size=int(args.event_forecast_batch_size),
+            learning_rate=float(args.event_forecast_learning_rate),
+            weight_decay=float(args.event_forecast_weight_decay),
+            seed=int(args.seed),
+            device=str(args.bc_device),
+            probability_prefix=str(args.event_forecast_probability_prefix),
+            period_steps=max(1, int(round(86400.0 / max(float(args.freq_s), 1.0)))),
+        )
+        event_forecast_dataset = build_event_forecast_dataset(
+            truth,
+            bounds=(int(bounds["oracle_pretrain"][0]), int(bounds["rl_train"][1])),
+            feature_columns=event_feature_columns,
+            event_column=str(args.event_column),
+            cfg=event_forecast_cfg,
+        )
+        event_forecaster = train_event_forecaster(event_forecast_dataset, event_forecast_cfg)
+        truth, learned_event_probability_columns = augment_truth_with_event_forecasts(truth, event_forecaster)
+        event_forecaster_summary = {
+            "feature_columns": [str(x) for x in event_feature_columns],
+            "probability_columns": [str(x) for x in learned_event_probability_columns],
+            "train_bounds": [int(bounds["oracle_pretrain"][0]), int(bounds["rl_train"][1])],
+            "history": event_forecaster.history,
+            "final_loss": float(event_forecaster.history["loss"][-1])
+            if event_forecaster.history.get("loss")
+            else None,
+            "final_brier": float(event_forecaster.history["brier"][-1])
+            if event_forecaster.history.get("brier")
+            else None,
+        }
+        log(
+            "learned event forecaster complete: "
+            f"columns={list(learned_event_probability_columns)} "
+            f"final_brier={event_forecaster_summary['final_brier']}"
+        )
 
     norm_start = args.normalization_start_idx
     norm_end = args.normalization_end_idx
@@ -374,6 +459,7 @@ def main() -> None:
         horizon=int(args.horizon),
         event_column=str(args.event_column),
         truth_future=bool(args.forecast_truth_future),
+        learned_event_probability_columns=learned_event_probability_columns,
     )
 
     train_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
@@ -513,10 +599,21 @@ def main() -> None:
         )
     cost_model = None
     cost_history = None
+    cost_ensemble_models = None
+    cost_ensemble_histories = None
     value_residual_support = None
     value_residual_threshold = None
     value_residual_validation_objective = None
-    if bool(args.include_cost_policy) or bool(args.include_value_residual_policy):
+    ensemble_value_support = None
+    ensemble_value_threshold = None
+    ensemble_value_beta = None
+    ensemble_value_validation_objective = None
+    advantage_residual_model = None
+    advantage_residual_history = None
+    advantage_residual_support = None
+    advantage_residual_threshold = None
+    advantage_residual_validation_objective = None
+    if bool(args.include_cost_policy) or bool(args.include_value_residual_policy) or bool(args.include_ensemble_value_policy):
         log("collecting action-cost dataset")
         cost_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
         cost_dataset = collect_action_cost_dataset(
@@ -528,19 +625,89 @@ def main() -> None:
             forecast_cfg=forecast_cfg,
         )
         log(f"action-cost dataset collected: rows={cost_dataset.inputs.shape[0]}")
-        cost_model, cost_history = train_action_cost_model(
-            cost_dataset,
-            ActionCostTrainingConfig(
-                hidden_dim=int(args.cost_hidden_dim),
-                epochs=int(args.cost_epochs),
-                batch_size=512,
-                seed=int(args.seed),
-                device=str(args.bc_device),
-            ),
+        cost_train_cfg = ActionCostTrainingConfig(
+            hidden_dim=int(args.cost_hidden_dim),
+            epochs=int(args.cost_epochs),
+            batch_size=512,
+            seed=int(args.seed),
+            device=str(args.bc_device),
+            ensemble_size=max(1, int(args.ensemble_value_size)) if bool(args.include_ensemble_value_policy) else 1,
+            bootstrap_fraction=float(args.ensemble_value_bootstrap_fraction),
+        )
+        if bool(args.include_ensemble_value_policy):
+            cost_ensemble_models, cost_ensemble_histories = train_action_cost_ensemble(cost_dataset, cost_train_cfg)
+            cost_model = cost_ensemble_models[0]
+            cost_history = cost_ensemble_histories[0]
+            final_losses = [
+                float(history["loss"][-1]) if history.get("loss") else float("nan")
+                for history in cost_ensemble_histories
+            ]
+            log(
+                "action-cost ensemble training complete: "
+                f"members={len(cost_ensemble_models)} final_loss_mean={float(np.nanmean(final_losses)):.6f}"
+            )
+        else:
+            cost_model, cost_history = train_action_cost_model(cost_dataset, cost_train_cfg)
+            log(
+                "action-cost model training complete: "
+                f"final_loss={cost_history['loss'][-1] if cost_history and cost_history.get('loss') else float('nan')}"
+            )
+    if bool(args.include_advantage_residual_policy):
+        log("collecting anchor-advantage dataset")
+        advantage_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
+        advantage_dataset = collect_anchor_advantage_dataset(
+            advantage_env,
+            candidate_masks,
+            anchor_mask=selected_static_mask,
+            start_indices=starts["train"].starts,
+            steps_per_start=int(args.train_steps),
+            teacher_cfg=teacher_cfg,
+            forecast_cfg=forecast_cfg,
+        )
+        log(f"anchor-advantage dataset collected: rows={advantage_dataset.inputs.shape[0]}")
+        advantage_train_cfg = ActionCostTrainingConfig(
+            hidden_dim=int(args.cost_hidden_dim),
+            epochs=int(args.cost_epochs),
+            batch_size=512,
+            seed=int(args.seed) + 17,
+            device=str(args.bc_device),
+        )
+        advantage_residual_model, advantage_residual_history = train_anchor_advantage_model(
+            advantage_dataset,
+            advantage_train_cfg,
         )
         log(
-            "action-cost model training complete: "
-            f"final_loss={cost_history['loss'][-1] if cost_history and cost_history.get('loss') else float('nan')}"
+            "anchor-advantage model training complete: "
+            f"final_loss={advantage_residual_history['loss'][-1] if advantage_residual_history and advantage_residual_history.get('loss') else float('nan')}"
+        )
+        (
+            selected_advantage_support_top_k,
+            advantage_residual_support,
+            advantage_residual_threshold,
+            advantage_residual_validation_objective,
+        ) = calibrate_advantage_residual_policy(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            model=advantage_residual_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=selected_static_mask,
+            labels=teacher_dataset.labels,
+            anchor_idx=selected_static_idx,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        args.advantage_residual_support_top_k = int(selected_advantage_support_top_k)
+        log(
+            "advantage-residual calibration: "
+            f"top_k={selected_advantage_support_top_k} "
+            f"threshold={advantage_residual_threshold} "
+            f"validation_objective={advantage_residual_validation_objective:.6f} "
+            f"support={list(advantage_residual_support) if advantage_residual_support is not None else None}"
         )
     if bool(args.include_value_residual_policy) and cost_model is not None:
         value_residual_support = action_support_from_labels(
@@ -570,6 +737,39 @@ def main() -> None:
             f"threshold={value_residual_threshold} "
             f"validation_objective={value_residual_validation_objective:.6f} "
             f"support={list(value_residual_support) if value_residual_support is not None else None}"
+        )
+    if bool(args.include_ensemble_value_policy) and cost_ensemble_models is not None:
+        ensemble_value_support = action_support_from_labels(
+            teacher_dataset.labels,
+            n_actions=int(candidate_masks.shape[0]),
+            top_k=int(args.ensemble_value_support_top_k),
+            min_count=int(args.bc_action_support_min_count),
+            anchor_idx=selected_static_idx,
+        )
+        (
+            ensemble_value_beta,
+            ensemble_value_threshold,
+            ensemble_value_validation_objective,
+        ) = calibrate_ensemble_value_policy(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            models=cost_ensemble_models,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=selected_static_mask,
+            allowed_action_indices=ensemble_value_support,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        log(
+            "ensemble-value calibration: "
+            f"beta={ensemble_value_beta} threshold={ensemble_value_threshold} "
+            f"validation_objective={ensemble_value_validation_objective:.6f} "
+            f"support={list(ensemble_value_support) if ensemble_value_support is not None else None}"
         )
     bc_fallback_margin = None
     if str(args.bc_fallback_source) == "validation_static":
@@ -703,6 +903,35 @@ def main() -> None:
                 preserve_warming=bool(args.bc_preserve_warming),
             )
         )
+    if bool(args.include_ensemble_value_policy) and cost_ensemble_models is not None:
+        policies.append(
+            ForecastAwareEnsembleValuePolicy(
+                models=cost_ensemble_models,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=selected_static_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=ensemble_value_support,
+                advantage_threshold=float(ensemble_value_threshold if ensemble_value_threshold is not None else 0.0),
+                uncertainty_beta=float(ensemble_value_beta if ensemble_value_beta is not None else 0.0),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
+    if bool(args.include_advantage_residual_policy) and advantage_residual_model is not None:
+        policies.append(
+            ForecastAwareAdvantageResidualPolicy(
+                model=advantage_residual_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=selected_static_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=advantage_residual_support,
+                advantage_threshold=float(
+                    advantage_residual_threshold if advantage_residual_threshold is not None else 0.0
+                ),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
     if args.custom_ppo_checkpoint:
         log(f"loading custom PPO checkpoint: {args.custom_ppo_checkpoint}")
         policies.append(
@@ -805,6 +1034,8 @@ def main() -> None:
                 "forecast_aware_mask_bc",
                 "forecast_aware_residual_bc",
                 "forecast_aware_value_residual",
+                "forecast_aware_ensemble_value",
+                "forecast_aware_advantage_residual",
             ]
         )
     ]
@@ -838,6 +1069,7 @@ def main() -> None:
         "oracle_target_weight_mode": str(args.oracle_target_weight_mode),
         "oracle_target_weights": oracle_target_weights,
         "objective_mode": str(args.objective_mode),
+        "learned_event_forecast": event_forecaster_summary,
         "task_error_columns": [str(x) for x in args.task_error_columns],
         "task_error_scales": [float(x) for x in args.task_error_scales] if args.task_error_scales else None,
         "task_error_weight": float(args.task_error_weight),
@@ -923,6 +1155,33 @@ def main() -> None:
             "advantage_threshold": value_residual_threshold,
             "advantage_grid": [float(x) for x in args.value_residual_advantage_grid],
             "validation_objective": value_residual_validation_objective,
+        },
+        "ensemble_value_policy": {
+            "included": bool(args.include_ensemble_value_policy),
+            "support_top_k": int(args.ensemble_value_support_top_k),
+            "support_indices": [int(x) for x in ensemble_value_support]
+            if ensemble_value_support is not None
+            else None,
+            "ensemble_size": int(args.ensemble_value_size),
+            "bootstrap_fraction": float(args.ensemble_value_bootstrap_fraction),
+            "selected_uncertainty_beta": ensemble_value_beta,
+            "selected_advantage_threshold": ensemble_value_threshold,
+            "beta_grid": [float(x) for x in args.ensemble_value_beta_grid],
+            "advantage_grid": [float(x) for x in args.ensemble_value_advantage_grid],
+            "validation_objective": ensemble_value_validation_objective,
+            "histories": cost_ensemble_histories,
+        },
+        "advantage_residual_policy": {
+            "included": bool(args.include_advantage_residual_policy),
+            "support_top_k": int(args.advantage_residual_support_top_k),
+            "support_grid": [int(x) for x in args.advantage_residual_support_grid],
+            "support_indices": [int(x) for x in advantage_residual_support]
+            if advantage_residual_support is not None
+            else None,
+            "advantage_threshold": advantage_residual_threshold,
+            "advantage_grid": [float(x) for x in args.advantage_residual_grid],
+            "validation_objective": advantage_residual_validation_objective,
+            "history": advantage_residual_history,
         },
         "bc_fallback": {
             "source": str(args.bc_fallback_source),
@@ -1338,6 +1597,247 @@ def calibrate_value_residual_threshold(
     return float(best_threshold), float(best_objective)
 
 
+def calibrate_advantage_residual_threshold(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    anchor_mask: tuple[bool, ...],
+    allowed_action_indices: tuple[int, ...] | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[float, float]:
+    rows: list[tuple[float, float, float, int]] = []
+    grid = [float(x) for x in args.advantage_residual_grid] or [0.0]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    for idx, threshold in enumerate(grid):
+        policy = ForecastAwareAdvantageResidualPolicy(
+            model=model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=anchor_mask,
+            device=str(args.bc_device),
+            allowed_action_indices=allowed_action_indices,
+            advantage_threshold=float(threshold),
+            preserve_warming=bool(args.bc_preserve_warming),
+            name=f"forecast_aware_advantage_residual_calib_{idx}",
+        )
+        result, _ = evaluate_policy_over_starts(
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=cfg,
+            oracle=oracle,
+            policy=policy,
+            steps=int(args.static_selection_steps),
+            start_indices=starts,
+            seed_offset=150_000 + idx * 101,
+        )
+        metrics = rich_metrics(
+            result,
+            sensor_ids=sensor_ids,
+            state_columns=state_columns,
+            per_step_budget=float(args.budget),
+            startup_peak_budget=float(args.startup_peak_budget),
+        )
+        metrics.update(
+            task_focus_metrics(
+                result,
+                state_columns=state_columns,
+                task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                event_only=bool(args.task_error_event_only),
+            )
+        )
+        objective = final_objective(
+            metrics,
+            mode=str(args.objective_mode),
+            task_error_weight=float(args.task_error_weight),
+        )
+        rows.append((float(objective), float(metrics.get("power_mean", np.nan)), float(threshold), idx))
+    rows.sort(key=lambda item: (item[0], item[1], item[3]))
+    best_objective, _, best_threshold, _ = rows[0]
+    return float(best_threshold), float(best_objective)
+
+
+def calibrate_advantage_residual_policy(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    anchor_mask: tuple[bool, ...],
+    labels: np.ndarray,
+    anchor_idx: int | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[int, tuple[int, ...] | None, float, float]:
+    rows: list[tuple[float, float, int, float, int]] = []
+    top_k_grid = [int(x) for x in args.advantage_residual_support_grid]
+    if not top_k_grid:
+        top_k_grid = [int(args.advantage_residual_support_top_k)]
+    threshold_grid = [float(x) for x in args.advantage_residual_grid] or [0.0]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    combo_idx = 0
+    for top_k in top_k_grid:
+        support = action_support_from_labels(
+            labels,
+            n_actions=int(candidate_masks.shape[0]),
+            top_k=max(0, int(top_k)),
+            min_count=int(args.bc_action_support_min_count),
+            anchor_idx=anchor_idx,
+        )
+        for threshold in threshold_grid:
+            policy = ForecastAwareAdvantageResidualPolicy(
+                model=model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=anchor_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=support,
+                advantage_threshold=float(threshold),
+                preserve_warming=bool(args.bc_preserve_warming),
+                name=f"forecast_aware_advantage_residual_calib_{combo_idx}",
+            )
+            result, _ = evaluate_policy_over_starts(
+                truth=truth,
+                sensors=sensors,
+                constraints=constraints,
+                cfg=cfg,
+                oracle=oracle,
+                policy=policy,
+                steps=int(args.static_selection_steps),
+                start_indices=starts,
+                seed_offset=160_000 + combo_idx * 101,
+            )
+            metrics = rich_metrics(
+                result,
+                sensor_ids=sensor_ids,
+                state_columns=state_columns,
+                per_step_budget=float(args.budget),
+                startup_peak_budget=float(args.startup_peak_budget),
+            )
+            metrics.update(
+                task_focus_metrics(
+                    result,
+                    state_columns=state_columns,
+                    task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                    task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                    event_only=bool(args.task_error_event_only),
+                )
+            )
+            objective = final_objective(
+                metrics,
+                mode=str(args.objective_mode),
+                task_error_weight=float(args.task_error_weight),
+            )
+            rows.append(
+                (
+                    float(objective),
+                    float(metrics.get("power_mean", np.nan)),
+                    max(0, int(top_k)),
+                    float(threshold),
+                    combo_idx,
+                )
+            )
+            combo_idx += 1
+    rows.sort(key=lambda item: (item[0], item[1], item[4]))
+    best_objective, _, best_top_k, best_threshold, _ = rows[0]
+    best_support = action_support_from_labels(
+        labels,
+        n_actions=int(candidate_masks.shape[0]),
+        top_k=max(0, int(best_top_k)),
+        min_count=int(args.bc_action_support_min_count),
+        anchor_idx=anchor_idx,
+    )
+    return int(best_top_k), best_support, float(best_threshold), float(best_objective)
+
+
+def calibrate_ensemble_value_policy(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    models: list[object],
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    anchor_mask: tuple[bool, ...],
+    allowed_action_indices: tuple[int, ...] | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[float, float, float]:
+    rows: list[tuple[float, float, float, float, int]] = []
+    beta_grid = [float(x) for x in args.ensemble_value_beta_grid] or [0.0]
+    threshold_grid = [float(x) for x in args.ensemble_value_advantage_grid] or [0.0]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    combo_idx = 0
+    for beta in beta_grid:
+        for threshold in threshold_grid:
+            policy = ForecastAwareEnsembleValuePolicy(
+                models=models,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=anchor_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=allowed_action_indices,
+                advantage_threshold=float(threshold),
+                uncertainty_beta=float(beta),
+                preserve_warming=bool(args.bc_preserve_warming),
+                name=f"forecast_aware_ensemble_value_calib_{combo_idx}",
+            )
+            result, _ = evaluate_policy_over_starts(
+                truth=truth,
+                sensors=sensors,
+                constraints=constraints,
+                cfg=cfg,
+                oracle=oracle,
+                policy=policy,
+                steps=int(args.static_selection_steps),
+                start_indices=starts,
+                seed_offset=140_000 + combo_idx * 101,
+            )
+            metrics = rich_metrics(
+                result,
+                sensor_ids=sensor_ids,
+                state_columns=state_columns,
+                per_step_budget=float(args.budget),
+                startup_peak_budget=float(args.startup_peak_budget),
+            )
+            metrics.update(
+                task_focus_metrics(
+                    result,
+                    state_columns=state_columns,
+                    task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                    task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                    event_only=bool(args.task_error_event_only),
+                )
+            )
+            objective = final_objective(
+                metrics,
+                mode=str(args.objective_mode),
+                task_error_weight=float(args.task_error_weight),
+            )
+            rows.append((float(objective), float(metrics.get("power_mean", np.nan)), float(beta), float(threshold), combo_idx))
+            combo_idx += 1
+    rows.sort(key=lambda item: (item[0], item[1], item[4]))
+    best_objective, _, best_beta, best_threshold, _ = rows[0]
+    return float(best_beta), float(best_threshold), float(best_objective)
+
+
 def select_deployables_for_final(
     args: argparse.Namespace,
     *,
@@ -1358,6 +1858,8 @@ def select_deployables_for_final(
         "forecast_aware_mask_bc",
         "forecast_aware_residual_bc",
         "forecast_aware_value_residual",
+        "forecast_aware_ensemble_value",
+        "forecast_aware_advantage_residual",
     }
     fixed = [policy for policy in policies if str(policy.name) not in deployable_names]
     candidates = [policy for policy in policies if str(policy.name) in deployable_names]

@@ -10,10 +10,22 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "v1"))
 
 from forecast_cmdp.features import ForecastContextConfig, build_event_forecast, sensor_timing_features
+from forecast_cmdp.event_forecaster import (
+    EventForecasterTrainingConfig,
+    augment_truth_with_event_forecasts,
+    build_event_forecast_dataset,
+    select_event_forecast_columns,
+    train_event_forecaster,
+)
 from forecast_cmdp.cost_policy import (
     ActionCostTrainingConfig,
+    ForecastAwareAdvantageResidualPolicy,
     ForecastAwareCostPolicy,
+    ForecastAwareEnsembleValuePolicy,
+    collect_anchor_advantage_dataset,
     collect_action_cost_dataset,
+    train_anchor_advantage_model,
+    train_action_cost_ensemble,
     train_action_cost_model,
 )
 from forecast_cmdp.dataset import collect_dagger_dataset, collect_teacher_dataset, concat_teacher_datasets
@@ -151,6 +163,64 @@ def test_event_forecast_truth_future_vector_shape():
     assert forecast.as_vector().shape == (11,)
     assert forecast.probabilities[1] == 1.0
     assert 0.0 <= forecast.time_to_event <= 1.0
+
+
+def test_event_forecast_can_read_learned_probability_columns():
+    truth = make_truth()
+    truth["learned_event_p_h1"] = np.linspace(0.0, 1.0, len(truth))
+    truth["learned_event_p_h2"] = 0.25
+    forecast = build_event_forecast(
+        truth,
+        10,
+        ForecastContextConfig(
+            horizon=3,
+            learned_event_probability_columns=("learned_event_p_h1", "learned_event_p_h2"),
+        ),
+    )
+    assert forecast.probabilities.shape == (3,)
+    assert np.isclose(forecast.probabilities[0], truth.loc[10, "learned_event_p_h1"])
+    assert np.isclose(forecast.probabilities[1], 0.25)
+    assert forecast.probabilities[2] == 0.0
+
+
+def test_learned_event_forecaster_augments_truth_without_future_columns():
+    truth = make_truth(72)
+    cfg = EventForecasterTrainingConfig(
+        horizon=3,
+        lookback=4,
+        hidden_dim=16,
+        epochs=2,
+        batch_size=16,
+        seed=11,
+        device="cpu",
+        period_steps=8,
+    )
+    columns = select_event_forecast_columns(
+        truth,
+        preferred_columns=("wind_speed_ms", "snow_particle_mean_velocity_ms"),
+        event_column="event_flag",
+    )
+    dataset = build_event_forecast_dataset(
+        truth,
+        bounds=(0, 48),
+        feature_columns=columns,
+        event_column="event_flag",
+        cfg=cfg,
+    )
+    assert dataset.features.shape[0] == dataset.targets.shape[0]
+    assert dataset.targets.shape[1] == 3
+    bundle = train_event_forecaster(dataset, cfg)
+    augmented, probability_columns = augment_truth_with_event_forecasts(truth, bundle)
+    assert len(probability_columns) == 3
+    for column in probability_columns:
+        assert column in augmented.columns
+        assert np.all((augmented[column].to_numpy() >= 0.0) & (augmented[column].to_numpy() <= 1.0))
+    forecast = build_event_forecast(
+        augmented,
+        20,
+        ForecastContextConfig(horizon=3, learned_event_probability_columns=probability_columns),
+    )
+    assert forecast.probabilities.shape == (3,)
 
 
 def test_sensor_timing_features_shape():
@@ -471,3 +541,143 @@ def test_action_cost_policy_smoke():
     )
     env.reset(start_idx=18)
     assert guarded_policy.act_mask(env).tolist() == [True, True, False]
+
+
+def test_ensemble_value_policy_smoke():
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    teacher_cfg = MpcTeacherConfig(planning_horizon=1, beam_width=2, max_branch=4)
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+    dataset = collect_action_cost_dataset(
+        env,
+        masks,
+        start_indices=(18,),
+        steps_per_start=3,
+        teacher_cfg=teacher_cfg,
+        forecast_cfg=forecast_cfg,
+    )
+    models, histories = train_action_cost_ensemble(
+        dataset,
+        ActionCostTrainingConfig(
+            epochs=2,
+            batch_size=8,
+            hidden_dim=16,
+            device="cpu",
+            ensemble_size=2,
+            bootstrap_fraction=0.75,
+        ),
+    )
+    assert len(models) == 2
+    assert len(histories) == 2
+    anchor = tuple(bool(x) for x in masks[0])
+    policy = ForecastAwareEnsembleValuePolicy(
+        models=models,
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        anchor_mask=anchor,
+        device="cpu",
+        uncertainty_beta=0.5,
+    )
+    env.reset(start_idx=18)
+    action = policy.act_mask(env)
+    assert action.shape == (3,)
+    assert env.projector.project_mask(action, env.runtimes).feasible
+
+
+def test_anchor_advantage_residual_policy_smoke():
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    teacher_cfg = MpcTeacherConfig(planning_horizon=1, beam_width=2, max_branch=4)
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+    anchor_idx = int(np.flatnonzero(np.all(masks == np.asarray([[1, 0, 0]], dtype=bool), axis=1))[0])
+    anchor = tuple(bool(x) for x in masks[anchor_idx])
+    dataset = collect_anchor_advantage_dataset(
+        env,
+        masks,
+        anchor_mask=anchor,
+        start_indices=(18,),
+        steps_per_start=3,
+        teacher_cfg=teacher_cfg,
+        forecast_cfg=forecast_cfg,
+    )
+    assert dataset.inputs.shape[0] > 0
+    assert dataset.anchor_idx == anchor_idx
+    model, history = train_anchor_advantage_model(
+        dataset,
+        ActionCostTrainingConfig(epochs=2, batch_size=8, hidden_dim=16, device="cpu"),
+    )
+    assert len(history["loss"]) == 2
+    policy = ForecastAwareAdvantageResidualPolicy(
+        model=model,
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        anchor_mask=anchor,
+        device="cpu",
+        advantage_threshold=0.0,
+    )
+    env.reset(start_idx=18)
+    action = policy.act_mask(env)
+    assert action.shape == (3,)
+    assert env.projector.project_mask(action, env.runtimes).feasible
+
+
+def test_anchor_advantage_dataset_handles_projected_anchor():
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=3)
+    teacher_cfg = MpcTeacherConfig(planning_horizon=1, beam_width=2, max_branch=4)
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+    anchor = (True, True, True)
+    env.reset(start_idx=18)
+    assert not np.array_equal(env.projector.project_mask(np.asarray(anchor), env.runtimes).selected_mask, np.asarray(anchor))
+    dataset = collect_anchor_advantage_dataset(
+        env,
+        masks,
+        anchor_mask=anchor,
+        start_indices=(18,),
+        steps_per_start=2,
+        teacher_cfg=teacher_cfg,
+        forecast_cfg=forecast_cfg,
+    )
+    assert dataset.inputs.shape[0] > 0
+    assert dataset.anchor_idx is not None
+    assert np.any(np.isclose(dataset.advantages, 0.0))
+
+
+def test_advantage_residual_policy_falls_back_to_projected_anchor():
+    import torch
+
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=3)
+    anchor = (True, True, True)
+    met_only_idx = int(np.flatnonzero(np.all(masks == np.asarray([[1, 0, 0]], dtype=bool), axis=1))[0])
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+
+    class NegativeAdvantageModel:
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, x):
+            out = torch.full((x.shape[0], 1), -1.0, dtype=torch.float32, device=x.device)
+            # The deployable candidate set still contains a valid action, but a
+            # non-positive predicted advantage should choose the static anchor
+            # mask and let the environment projector execute it.
+            out[:, 0] = -1.0
+            return out
+
+    policy = ForecastAwareAdvantageResidualPolicy(
+        model=NegativeAdvantageModel(),
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        anchor_mask=anchor,
+        device="cpu",
+        allowed_action_indices=(met_only_idx,),
+        advantage_threshold=0.0,
+    )
+    env.reset(start_idx=18)
+    action = policy.act_mask(env)
+    assert action.tolist() == [True, True, True]
+    assert env.projector.project_mask(action, env.runtimes).feasible
