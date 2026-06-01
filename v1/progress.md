@@ -906,3 +906,10 @@
 - Remote verification after sync also passed: `python -m py_compile ...` and
   `python -m pytest -q v1/tests/test_forecast_cmdp_core.py` reported
   `23 passed`.
+- Committed the teacher-rate implementation as
+  `1cdff8b Add teacher rate deployable policy`.
+- Launched B=1.35 teacher-rate experiment in tmux
+  `v1_budget1p35_teacher_rate_20260601`, output root
+  `v1/artifacts/claim_suite_budget1p35_teacher_rate_guarded`, preset
+  `learned_hybrid_rate_guarded_safe`, seeds `41--45`. Early logs show all five
+  seeds training the split-compliant learned event forecaster.
