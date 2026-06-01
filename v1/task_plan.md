@@ -154,6 +154,9 @@ will continue toward learned rollout-value / online planning.
   value-residual, advantage-residual, and event-threshold deployables.
 - [ ] Run server n=5 event-threshold hybrid candidate:
   `v1_claim_learned_hybrid_event_guarded_n5_20260601`.
+  Paired confirmation result:
+  `v1_claim_learned_hybrid_event_guarded_paired_n5_20260601` passed the n=5
+  gate: deployable `4/5`, teacher `5/5`, mean margin `+0.003758`.
 - [ ] Scale the final strong candidate beyond the old n=5 single-setting gate:
   more seeds, at least two budgets, and at least one event-regime perturbation.
 - **Status:** in_progress

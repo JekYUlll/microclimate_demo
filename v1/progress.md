@@ -747,3 +747,20 @@
   sensor noise. Local `py_compile` and core tests still report `19 passed`.
   The already-running remote job uses the previous guard implementation; if
   its result is ambiguous or fails, rerun after syncing this paired-seed fix.
+- First event-threshold hybrid run completed and passed the n=5 gate:
+  deployable `4/5`, mean margin `+0.003758`, median `+0.002888`, teacher
+  `5/5`, sign-test `p=0.375`. Selected deployables were value-residual for
+  seeds 41/44 and event-threshold for seeds 42/43/45; only seed44 failed.
+- Synced the paired-seed guard fix to the server, verified remote
+  `py_compile` and tests (`19 passed`), and launched clean confirmation run
+  `v1_claim_learned_hybrid_event_guarded_paired_n5_20260601` with output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_hybrid_event_guarded_paired`.
+- Paired confirmation run completed and was aggregated/synced locally. Result:
+  `claim_pass=true`, deployable `4/5`, mean margin `+0.003758`, median
+  `+0.002888`, teacher `5/5`, sign-test `p=0.375`. Seed44 remains the only
+  failure. Selected deployables: value-residual for seeds 41/44 and
+  event-threshold for seeds 42/43/45.
+- Behavior summary for the paired main result: event-threshold deployable
+  average power `1.1487`, switch rate `0.3812`, zero warmup aborts; value
+  residual average power `1.1869`, switch rate `0.1733`, zero warmup aborts;
+  static average power `1.1779`; teacher average power `0.9370`.

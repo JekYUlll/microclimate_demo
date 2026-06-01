@@ -346,3 +346,13 @@
   the switched action is teacher-supported, and all action/threshold choices are
   validation-only. It may still fail, but it directly tests whether the dynamic
   sensing value can be recovered with a lower-variance policy class.
+- The paired confirmation run passed the strict n=5 gate:
+  deployable `4/5`, teacher `5/5`, mean deployable margin `+0.003758`.
+  This is the strongest deployable result so far because the selected policy is
+  explicitly forecast-triggered in three seeds and the validation guard uses
+  paired start-level comparisons under the same sensor-noise seed.
+- The limitation remains clear: seed44 still fails, and the sign test is not
+  significant at n=5 (`p=0.375`). The result supports the core feasibility
+  claim and mechanism direction, but the next evidence must test robustness
+  across budgets and event-regime perturbations before making a full paper
+  claim.
