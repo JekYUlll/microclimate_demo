@@ -448,3 +448,7 @@
   n=5 result lost only seed44, the BC/KNN method still has one narrow path to a
   combined `12/15`: it must run `5/5` on the original seeds. That check is
   necessary before rejecting BC/KNN as the combined B=1.20 main method.
+- The old-seed BC/KNN check failed immediately on seeds 41 and 42, closing
+  that narrow path. This strengthens the conclusion that the current
+  deployable layer is the bottleneck; adding more guarded action classifiers
+  does not reliably transfer teacher value to final-test rollouts.

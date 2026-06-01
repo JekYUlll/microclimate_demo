@@ -1028,3 +1028,6 @@
   `v1_claim_b1p20_n5_bc_20260601`, two-way parallel on GPUs `4/5`. This tests
   whether the same BC/KNN method can reach combined `12/15` if it fixes the
   old seed44 failure.
+- Early old-seed BC/KNN results close that narrow path: seeds 41 and 42 both
+  fail (`-0.003910`, `-0.007997`). Since the extension result is `7/10`, the
+  combined BC/KNN route can no longer reach `12/15`.
