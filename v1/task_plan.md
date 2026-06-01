@@ -192,6 +192,10 @@ will continue toward learned rollout-value / online planning.
 - [ ] Active correction: evaluate the B=1.20 BC/KNN guarded hybrid extension.
   Early seeds `46--47` pass, but the full n=10 corrective result is still
   running.
+- [ ] Follow-up correction: because BC/KNN guarded reached only `5/8` before
+  becoming mathematically unable to hit `8/10`, run the teacher-rate guarded
+  extension as a distinct compression mechanism rather than another action
+  classifier.
 - **Status:** in_progress
 
 ## Error Log

@@ -436,3 +436,10 @@
   correction is to expand the guarded candidate set with direct BC/KNN teacher
   imitation and let validation choose; early completed seeds `46--47` both
   pass under that route.
+- Adding BC/KNN to the guarded candidate set is also insufficient on the
+  extension seeds. It reaches only `5/8` before the `8/10` target becomes
+  impossible. This matters because BC/KNN is not a fundamentally different
+  temporal model; it is another action classifier over the same rollout
+  distribution. The next correction should test a different compression of the
+  teacher behavior, such as active-rate/freshness targets, before investing in
+  heavier learned online planning.
