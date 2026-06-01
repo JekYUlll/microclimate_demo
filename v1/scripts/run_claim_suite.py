@@ -69,6 +69,7 @@ def parse_args() -> argparse.Namespace:
             "learned_hybrid_event_guarded_safe",
             "learned_hybrid_event_cycle_guarded_safe",
             "learned_hybrid_rate_guarded_safe",
+            "learned_hybrid_sequence_guarded_safe",
             "cost_support6_safe",
             "no_dagger",
             "oracle_objective",
@@ -307,6 +308,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
         "cost_support6_safe",
         "no_dagger",
         "no_anchor_guard",
@@ -365,6 +367,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
         "cost_support6_safe",
     }:
         common.append("--bc-preserve-warming")
@@ -394,6 +397,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe": 6,
         "learned_hybrid_event_cycle_guarded_safe": 6,
         "learned_hybrid_rate_guarded_safe": 6,
+        "learned_hybrid_sequence_guarded_safe": 6,
     }.get(preset, 0)
     common.extend(["--bc-action-support-top-k", str(support_top_k)])
     if preset == "support_calib_safe":
@@ -414,6 +418,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
     }:
         common.append("--no-include-bc-policy")
     else:
@@ -436,6 +441,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
     }:
         common.extend(["--deployable-selection", "validation"])
         if preset in {
@@ -443,6 +449,7 @@ def base_command(
             "learned_hybrid_event_guarded_safe",
             "learned_hybrid_event_cycle_guarded_safe",
             "learned_hybrid_rate_guarded_safe",
+            "learned_hybrid_sequence_guarded_safe",
         }:
             common.extend(
                 [
@@ -488,6 +495,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
     }:
         common.extend(
             [
@@ -565,6 +573,7 @@ def base_command(
             "learned_hybrid_event_guarded_safe",
             "learned_hybrid_event_cycle_guarded_safe",
             "learned_hybrid_rate_guarded_safe",
+            "learned_hybrid_sequence_guarded_safe",
         }:
             common.extend(["--advantage-residual-support-grid", "3", "5", "6", "8", "12"])
     else:
@@ -579,6 +588,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
     }:
         common.extend(
             [
@@ -599,6 +609,7 @@ def base_command(
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
+        "learned_hybrid_sequence_guarded_safe",
     }:
         common.extend(
             [
@@ -670,6 +681,10 @@ def base_command(
         )
     else:
         common.append("--no-include-teacher-rate-policy")
+    if preset == "learned_hybrid_sequence_guarded_safe":
+        common.extend(["--include-teacher-cycle-policy", "--teacher-cycle-max-lookahead", "64"])
+    else:
+        common.append("--no-include-teacher-cycle-policy")
 
     if preset in {"no_dagger", "value_residual_no_dagger"}:
         common.extend(["--dagger-iters", "0"])

@@ -52,6 +52,7 @@ from forecast_cmdp.mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, enumer
 from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareCyclePolicy,
     ForecastAwareEventSupportCyclePolicy,
     ForecastAwareEventThresholdPolicy,
     ForecastAwareKNNPolicy,
@@ -214,6 +215,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teacher-rate-blend-grid", nargs="*", type=float, default=[0.5, 0.75, 1.0])
     parser.add_argument("--teacher-rate-freshness-grid", nargs="*", type=float, default=[0.0, 0.1, 0.25, 0.5])
     parser.add_argument("--teacher-rate-power-grid", nargs="*", type=float, default=[0.0, 0.03, 0.08])
+    parser.add_argument("--include-teacher-cycle-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--teacher-cycle-max-lookahead", type=int, default=32)
     parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--knn-k", type=int, default=5)
     parser.add_argument("--include-cost-policy", action=argparse.BooleanOptionalAction, default=False)
@@ -1070,6 +1073,16 @@ def main() -> None:
                 anchor_mask=selected_static_mask,
             )
         )
+    if bool(args.include_teacher_cycle_policy):
+        policies.append(
+            ForecastAwareCyclePolicy(
+                labels=teacher_dataset.labels,
+                candidate_masks=candidate_masks,
+                preserve_warming=bool(args.bc_preserve_warming),
+                max_lookahead=int(args.teacher_cycle_max_lookahead),
+                name="forecast_aware_teacher_cycle",
+            )
+        )
     if bool(args.include_cost_policy) and cost_model is not None:
         policies.append(
             ForecastAwareCostPolicy(
@@ -1226,6 +1239,7 @@ def main() -> None:
                 "forecast_aware_event_threshold",
                 "forecast_aware_event_support_cycle",
                 "forecast_aware_teacher_rate",
+                "forecast_aware_teacher_cycle",
                 "forecast_aware_residual_bc",
                 "forecast_aware_value_residual",
                 "forecast_aware_ensemble_value",
@@ -1365,6 +1379,10 @@ def main() -> None:
             "freshness_grid": [float(x) for x in args.teacher_rate_freshness_grid],
             "power_grid": [float(x) for x in args.teacher_rate_power_grid],
             "validation_objective": teacher_rate_validation_objective,
+        },
+        "teacher_cycle_policy": {
+            "included": bool(args.include_teacher_cycle_policy),
+            "max_lookahead": int(args.teacher_cycle_max_lookahead),
         },
         "deployable_selection": {
             "mode": str(args.deployable_selection),
@@ -2357,6 +2375,7 @@ def select_deployables_for_final(
         "forecast_aware_event_threshold",
         "forecast_aware_event_support_cycle",
         "forecast_aware_teacher_rate",
+        "forecast_aware_teacher_cycle",
         "forecast_aware_residual_bc",
         "forecast_aware_value_residual",
         "forecast_aware_ensemble_value",

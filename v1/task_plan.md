@@ -174,6 +174,10 @@ will continue toward learned rollout-value / online planning.
   select event-support-cycle in most seeds. The teacher's successful behavior
   is closer to duty-cycle power saving over teacher-supported masks than to a
   single event action.
+- [ ] Follow-up correction: test teacher-label sequence cycling. The
+  teacher-rate run also failed (`1/5`, mean margin `-0.007056`), so the next
+  candidate preserves the teacher's high-switch temporal sequence rather than
+  only matching average sensor active rates.
 - **Status:** in_progress
 
 ## Error Log

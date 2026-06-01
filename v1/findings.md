@@ -404,3 +404,9 @@
   high-power event masks. A deployable policy should therefore target teacher
   sensor active rates and adjust online by duty deficit/freshness, rather than
   only thresholding event probability.
+- The first teacher-rate attempt only slightly improved mean margin and was
+  never selected by validation, so average duty targets are still too weak.
+  The next plausible compression is sequence-level rather than rate-level:
+  replay the teacher-label sequence with feasibility lookahead, preserving the
+  high switching structure that appears to generate the teacher's lower-power
+  forecast benefit.

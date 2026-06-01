@@ -913,3 +913,16 @@
   `v1/artifacts/claim_suite_budget1p35_teacher_rate_guarded`, preset
   `learned_hybrid_rate_guarded_safe`, seeds `41--45`. Early logs show all five
   seeds training the split-compliant learned event forecaster.
+- The teacher-rate run completed with a small improvement but still failed:
+  deployable `1/5`, teacher `5/5`, mean deployable margin `-0.007056`.
+  Teacher-rate was not selected by validation in any seed; seed43 switched from
+  advantage residual to event-threshold and improved but remained negative.
+- Added a teacher-label sequence cycle candidate using the existing
+  `ForecastAwareCyclePolicy`. New preset:
+  `learned_hybrid_sequence_guarded_safe`. This tests whether repeating the
+  training teacher's high-switch label sequence is a better deployable
+  compression of the B=1.35 teacher than rate targets or event thresholds.
+- Verification for teacher-cycle: local `py_compile` passed, local core tests
+  reported `23 passed`, a tiny `run_protocol_gate` smoke selected
+  `forecast_aware_teacher_cycle` and counted it in `gate_summary.json`, and
+  remote `py_compile` plus core tests also reported `23 passed`.
