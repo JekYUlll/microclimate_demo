@@ -39,42 +39,48 @@ predicted probabilities are injected into the truth table as
 
 This makes forecast awareness a learned module that can be ablated and improved.
 
-### 2. Action-Conditioned Rollout Value
+### 2. Action-Conditioned Value and Planner
 
 The scheduler should not imitate action IDs directly. It should learn a
 state-action estimate of short-horizon rollout cost under the teacher objective.
-The current value-residual policy is the first version of this idea.
+The value-residual policy was the first version of this idea, but n=15 scaling
+showed that one-step residual selection is still too brittle.
 
 Server evidence shows that a plain learned event forecast is not enough: it
 repeats the old weak `4/5` result with a small mean margin. An uncertainty-aware
-absolute-cost ensemble was also insufficient (`3/5`, negative mean margin).
-The next active route is therefore not a larger ensemble, but a different
-target: learn the candidate advantage relative to the validation-selected static
-anchor directly.
+absolute-cost ensemble was also insufficient (`3/5`, negative mean margin), and
+direct anchor-advantage regression failed decisively (`0/5`). Adding BC/KNN,
+rate matching, and teacher-sequence compression also failed to produce robust
+deployment.
 
-The anchor-advantage residual policy trains on:
+The active route is therefore a learned rollout-value planner:
 
 ```text
-advantage(state, action) = cost(validation_static_anchor) - cost(action)
+state/action -> learned short-horizon cost
+state/action -> learned next causal policy feature
+planner(state) -> short-depth beam search over supported feasible masks
 ```
 
-and deploys only when the predicted advantage clears a validation-calibrated
-threshold. This targets the real decision boundary instead of subtracting two
-independently learned absolute costs at runtime.
+The feature-transition model is trained only on the train split. During final
+deployment, the planner uses only current causal state, learned event forecast
+columns, the fitted transition model, the fitted action-cost model, and the
+hard feasibility layer.
 
 ### 3. Online Planner
 
-The final deployable method should choose actions by online optimization over
-feasible subsets using:
+The current planner candidate is `forecast_aware_rollout_value`. It chooses
+actions by online optimization over feasible subsets using:
 
 - learned event forecast;
 - action-conditioned cost/value estimates;
+- learned causal feature transitions;
 - hard power and startup feasibility;
 - SOC and warmup state;
 - validation-calibrated risk control.
 
-The planner may retain a static anchor as a safety fallback, but the scientific
-claim should come from learned forecast/value planning, not from the anchor.
+It retains the validation-selected static anchor as a safety fallback, but the
+claim should come from learned forecast/value planning being selected and
+improving final-test objective, not from the anchor alone.
 
 ## Immediate Experiments
 
@@ -83,16 +89,19 @@ claim should come from learned forecast/value planning, not from the anchor.
    original claim.
 2. Completed: `learned_ensemble_value_safe`, n=5, budget 1.20.
    Result: fail (`3/5`, mean margin `-0.003409`).
-3. Running: `learned_advantage_residual_safe`, n=5, budget 1.20.
-   Purpose: test whether direct anchor-relative advantage learning improves the
-   deployable margin and fixes the seed44/low-margin failure mode.
-4. Prepared fallback: `learned_advantage_residual_calib_safe`, n=5, budget
-   1.20. This lets validation select both support size and advantage threshold,
-   reducing sensitivity to a manually chosen teacher-label top-k.
-5. If the advantage route passes with materially better margin, scale it to
-   more seeds and budget matrix. If it fails, the next change must be a larger
-   online planner or environment/task redesign, not another threshold-only
-   variant.
+3. Completed: `learned_advantage_residual_calib_safe`, n=5, budget 1.20.
+   Result: fail (`0/5`, mean margin `-0.018997`), so direct advantage
+   regression is rejected as the main deployable route.
+4. Completed: B=1.20 extension of event/value and BC/KNN guarded hybrids.
+   Result: event/value combined `10/15`; BC/KNN extension `7/10` and old-seed
+   check immediately failed seeds `41--42`. Shallow classifier expansion is
+   not enough.
+5. Running: `learned_hybrid_planner_guarded_safe`, n=5, budget 1.20.
+   Purpose: test whether learned feature-transition planning can recover the
+   teacher's temporal value while remaining deployable and validation-guarded.
+6. If planner n=5 improves the original seed set, scale it to seeds `46--55`
+   and then retest sparse-event perturbation. If it fails, inspect transition
+   error and candidate support before adding another policy head.
 
 ## Claims That Remain Forbidden Until Proven
 
