@@ -800,3 +800,27 @@
   `41--45`, followed by claim-suite output root
   `v1/artifacts/claim_suite_event_sparse0p20_learned_hybrid_event_guarded`.
   Early logs show seed truth generation has started without path errors.
+- Completed and aggregated the full budget matrix
+  `v1/artifacts/budget_matrix_learned_hybrid_event_guarded_paired`. Summary:
+  `B=1.05` deployable `1/5`, teacher `4/5`, mean deployable margin
+  `-0.011709`; `B=1.20` deployable `4/5`, teacher `5/5`, mean margin
+  `+0.003758`; `B=1.35` deployable `1/5`, teacher `5/5`, mean margin
+  `-0.009496`. The matrix assessment is `matrix_pass=false`.
+- Interpretation of the budget matrix: the current deployable mechanism is an
+  operating-point result at the calibrated budget, not a cross-budget robust
+  scheduler. Tight budget `B=1.05` is a negative boundary; loose budget
+  `B=1.35` suggests the validation-selected static anchor becomes strong enough
+  that the learned trigger often hurts final objective.
+- Fixed a budget aggregation bug where `parse_budget()` treated the matrix root
+  directory `budget_matrix_*` as a concrete budget tag. Added a regression test;
+  local and remote tests now report `20 passed`.
+- Completed the event-sparse perturbation
+  `v1/artifacts/claim_suite_event_sparse0p20_learned_hybrid_event_guarded`.
+  It passed the same n=5 gate: deployable `4/5`, teacher `5/5`, mean
+  deployable margin `+0.013532`, median `+0.003177`, sign-test `p=0.375`.
+  Selected deployables were event-threshold in three seeds and value-residual
+  in two seeds; seed41 was essentially tied but failed strict `margin > 0`.
+- Behavior diagnostics for event-sparse: event-threshold deployable average
+  power `1.1520`, switch rate `0.2230`, zero warmup aborts; value-residual
+  power `1.1782`, switch rate `0.6548`, zero warmup aborts; teacher power
+  `0.9709`; static power `1.1660`.

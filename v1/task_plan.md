@@ -159,10 +159,10 @@ will continue toward learned rollout-value / online planning.
   gate: deployable `4/5`, teacher `5/5`, mean margin `+0.003758`.
 - [ ] Scale the final strong candidate beyond the old n=5 single-setting gate:
   more seeds, at least two budgets, and at least one event-regime perturbation.
-  Budget matrix is running; `B=1.05` failed as a tight-budget boundary,
-  `B=1.20` reproduced the n=5 pass, and `B=1.35` is in progress. A separate
-  sparse-event perturbation chain (`event_coverage=0.20`) has been launched
-  after adding a v1-only truth/oracle input preparation script.
+  Budget matrix completed and failed as a cross-budget robustness claim:
+  `B=1.05` deployable `1/5`, `B=1.20` deployable `4/5`, and `B=1.35`
+  deployable `1/5`. The sparse-event perturbation (`event_coverage=0.20`)
+  passed at `4/5` with positive mean margin.
 - **Status:** in_progress
 
 ## Error Log
@@ -177,3 +177,4 @@ will continue toward learned rollout-value / online planning.
 | 2026-05-27 | Action-cost policy minimized over OOD feasible masks and dropped core context sensors | Added teacher-label action-support guard plus static-anchor inclusion for deployable policies |
 | 2026-06-01 | Anchor-advantage fixed-support run produced non-result failures: seed42 disk full and seed45 empty advantage rows | Cleaned server caches, stopped old runs, fixed anchor projection semantics, added regression tests, and relaunched calibrated anchorfix suite |
 | 2026-06-01 | New v1 input-prep smoke initially could not find AntAWS data because the default path inherited the old script's working-directory assumption | Changed the default to `data/AntAWS/3_hourly` and added path resolution against the project root and archived framework root |
+| 2026-06-01 | `aggregate_budget_matrix.py` parsed the root directory name `budget_matrix_*` as a budget tag | Tightened parsing to match only concrete tags such as `budget1p20` and added a regression test |

@@ -366,8 +366,16 @@
 - The same matrix reproduces `B=1.20` exactly: deployable `4/5`, teacher `5/5`,
   mean margin `+0.003758`. This confirms the main result is not an artifact of
   the previous output directory, but it is still one calibrated operating
-  budget until `B=1.35` and event-regime perturbation finish.
+  budget.
+- The completed `B=1.35` result also fails deployable robustness: deployable
+  `1/5`, teacher `5/5`, mean margin `-0.009496`. This is not a teacher/objective
+  failure; it is a deployable selection/trigger failure under a looser power
+  operating point where the validation-selected static anchor is already strong.
 - For event-regime scaling, the clean route is to prepare v1 inputs directly:
   generate the truth sequence and frozen oracle only, then run the v1
   claim-suite. Re-running archived custom PPO just to obtain an oracle would
   mix historical machinery into the new method and waste runtime.
+- The sparse-event perturbation (`event_coverage=0.20`) passes the current n=5
+  gate: deployable `4/5`, teacher `5/5`, mean margin `+0.013532`. This supports
+  an event-regime robustness claim for a sparser event distribution, but it
+  does not rescue the cross-budget robustness claim.

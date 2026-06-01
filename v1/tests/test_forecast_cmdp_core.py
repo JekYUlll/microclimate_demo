@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 import sys
 
 import numpy as np
@@ -779,3 +780,16 @@ def test_advantage_residual_policy_does_not_open_full_space_when_support_invalid
     assert not np.array_equal(projection.selected_mask, np.asarray(anchor))
     action = policy.act_mask(env)
     assert action.tolist() == [True, True, True]
+
+
+def test_budget_matrix_parse_budget_ignores_matrix_root_name():
+    module_path = ROOT / "v1" / "scripts" / "aggregate_budget_matrix.py"
+    spec = importlib.util.spec_from_file_location("aggregate_budget_matrix_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    path = Path(
+        "v1/artifacts/budget_matrix_learned_hybrid_event_guarded_paired/"
+        "budget1p20/learned_hybrid_event_guarded_safe_seed41/gate_summary.json"
+    )
+    assert module.parse_budget(path) == 1.20

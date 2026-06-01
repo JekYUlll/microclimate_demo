@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 
 import numpy as np
 import pandas as pd
@@ -153,7 +154,7 @@ def render_markdown(summary: pd.DataFrame, assessment: dict[str, object]) -> str
 
 def parse_budget(path: Path) -> float:
     for part in path.parts:
-        if part.startswith("budget"):
+        if re.fullmatch(r"budget\d+(?:p\d+)?", part):
             return float(part.replace("budget", "").replace("p", "."))
     return float("nan")
 
