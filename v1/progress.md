@@ -764,3 +764,39 @@
   average power `1.1487`, switch rate `0.3812`, zero warmup aborts; value
   residual average power `1.1869`, switch rate `0.1733`, zero warmup aborts;
   static average power `1.1779`; teacher average power `0.9370`.
+- Launched budget-robustness matrix in tmux
+  `v1_budget_event_guarded_paired_20260601`, output root
+  `v1/artifacts/budget_matrix_learned_hybrid_event_guarded_paired`, budgets
+  `1.05/1.20/1.35`, seeds `41--45`. Early logs show all five `budget1p05`
+  jobs started and reached train-static-prior computation without parameter or
+  import errors.
+- `budget1p05` completed inside the matrix and failed robustness: deployable
+  `1/5`; teacher `4/5` because seed41 teacher also lost to the stricter static
+  comparator. This indicates the current dynamic policy should not be claimed
+  as robust under a tighter `B=1.05` budget. The matrix is continuing with
+  `budget1p20` and then `budget1p35` to identify the supported operating
+  regime.
+- `budget1p20` completed inside the matrix and exactly reproduced the paired
+  main result: deployable `4/5`, teacher `5/5`, mean deployable margin
+  `+0.003758`. Per-seed margins were seed41 `+0.002340`, seed42 `+0.006832`,
+  seed43 `+0.002888`, seed44 `-0.001840`, seed45 `+0.008566`. The matrix has
+  advanced to `budget1p35`; latest logs show all five seeds collecting MPC
+  teacher datasets.
+- Added `v1/scripts/prepare_claim_inputs.py`, a v1-only input preparation
+  script that generates per-seed `truth_energy_split.csv`,
+  `split_protocol_manifest.json`, and `v2_tcn_oracle.pt` without training the
+  archived custom PPO. This is needed for event-regime perturbation experiments
+  that should remain on the new v1 line.
+- Verification for the input-prep script: local `py_compile` passed, local
+  dry-run produced the expected truth-builder command, remote `py_compile`
+  passed, and a remote tiny smoke generated truth, validation diagnostics, and
+  a one-epoch oracle under `/tmp/v1_claim_inputs_smoke`.
+- The first smoke exposed a path bug: default `--antaws-root` inherited
+  `../data/AntAWS/3_hourly` from an old working-directory assumption. Fixed the
+  default to `data/AntAWS/3_hourly` and added project-root path resolution.
+- Launched event-regime perturbation chain in tmux
+  `v1_event_sparse0p20_20260601`: input root
+  `v1/artifacts/claim_inputs_event_sparse0p20`, event coverage `0.20`, seeds
+  `41--45`, followed by claim-suite output root
+  `v1/artifacts/claim_suite_event_sparse0p20_learned_hybrid_event_guarded`.
+  Early logs show seed truth generation has started without path errors.

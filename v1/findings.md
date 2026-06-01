@@ -356,3 +356,18 @@
   claim and mechanism direction, but the next evidence must test robustness
   across budgets and event-regime perturbations before making a full paper
   claim.
+
+## Strong-Claim Scaling Finding
+- Cross-budget evidence should be interpreted as operating-regime support, not
+  as a monotonic guarantee. The first budget-matrix result shows `B=1.05`
+  fails clearly: deployable `1/5`, mean margin `-0.011709`, and even the
+  privileged teacher loses in seed41. This makes tight-budget robustness a
+  negative boundary condition for the current method.
+- The same matrix reproduces `B=1.20` exactly: deployable `4/5`, teacher `5/5`,
+  mean margin `+0.003758`. This confirms the main result is not an artifact of
+  the previous output directory, but it is still one calibrated operating
+  budget until `B=1.35` and event-regime perturbation finish.
+- For event-regime scaling, the clean route is to prepare v1 inputs directly:
+  generate the truth sequence and frozen oracle only, then run the v1
+  claim-suite. Re-running archived custom PPO just to obtain an oracle would
+  mix historical machinery into the new method and waste runtime.
