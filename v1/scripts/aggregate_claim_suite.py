@@ -86,6 +86,9 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
         teacher_cycle = manifest.get("teacher_cycle_policy", {})
         if not isinstance(teacher_cycle, dict):
             teacher_cycle = {}
+        rollout_value = manifest.get("rollout_value_policy", {})
+        if not isinstance(rollout_value, dict):
+            rollout_value = {}
         static_objective = float(summary["validation_selected_static_objective"])
         teacher_objective = nullable_float(summary.get("teacher_reference_objective"))
         deployable_objective = nullable_float(summary.get("best_deployable_objective"))
@@ -118,6 +121,11 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "teacher_rate_validation_objective": nullable_float(teacher_rate.get("validation_objective")),
                 "teacher_cycle_included": bool(teacher_cycle.get("included", False)),
                 "teacher_cycle_max_lookahead": teacher_cycle.get("max_lookahead", np.nan),
+                "rollout_value_included": bool(rollout_value.get("included", False)),
+                "rollout_value_support_top_k": rollout_value.get("support_top_k", np.nan),
+                "rollout_value_depth": rollout_value.get("planning_depth", np.nan),
+                "rollout_value_threshold": nullable_float(rollout_value.get("advantage_threshold")),
+                "rollout_value_validation_objective": nullable_float(rollout_value.get("validation_objective")),
             }
         )
         metrics_path = run_dir / "metrics_final.csv"
