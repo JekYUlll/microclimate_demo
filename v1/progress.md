@@ -1009,3 +1009,13 @@
   passing. Seed46 improved from event/value margin `+0.000652` to BC-guarded
   margin `+0.004303`; seed47 remains `+0.001845`. The rest of the corrective
   suite is still running.
+- The BC/KNN guarded correction reached `5/8` on completed extension seeds.
+  Since it already has three failures, it cannot reach the required `8/10`
+  extension win count even if the remaining seeds pass. It improves some
+  margins but does not solve the robustness problem.
+- Launched a different B=1.20 corrective mechanism:
+  `learned_hybrid_rate_guarded_safe`, root
+  `v1/artifacts/claim_suite_b1p20_ext_teacher_rate_guarded_46_55`, tmux
+  `v1_claim_b1p20_ext_rate_46_55_20260601`, single-GPU/serial on GPU `1`.
+  This tests teacher active-rate/freshness compression rather than adding more
+  action classifiers.
