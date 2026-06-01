@@ -979,3 +979,7 @@
   permissive for n>5. They now compute required wins from the actual group
   size. Local and remote core tests both report `25 passed`. Committed as
   `4a7a74d Fix extended claim win-rate gate`.
+- Added multi-root support to `aggregate_claim_suite.py` so the old n=5 suite
+  and new seeds `46--55` suite can be evaluated together without symlink
+  staging. Local and remote core tests now report `26 passed`. Committed as
+  `ad3423d Support multi-root claim aggregation`.
