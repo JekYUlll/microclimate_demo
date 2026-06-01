@@ -983,3 +983,15 @@
   and new seeds `46--55` suite can be evaluated together without symlink
   staging. Local and remote core tests now report `26 passed`. Committed as
   `ad3423d Support multi-root claim aggregation`.
+- Partial B=1.20 extension result after 9/10 new seeds:
+  deployable `5/9`, teacher `8/9`, mean deployable margin `-0.000957`.
+  Failures are split across both selected deployable families:
+  event-threshold `2/4` wins and value-residual `3/5` wins. This already
+  makes the combined n=15 80% deployable-win claim impossible for the current
+  `learned_hybrid_event_guarded_safe` route, even if seed55 wins.
+- Started a corrective B=1.20 extension suite that restores BC/KNN as guarded
+  deployable candidates alongside event-threshold and value-residual:
+  tmux `v1_claim_b1p20_ext_bc_46_55_20260601`, root
+  `v1/artifacts/claim_suite_b1p20_ext_learned_hybrid_bc_guarded_46_55`,
+  preset `learned_hybrid_bc_guarded_safe`, seeds `46--55`, two-way parallel
+  on GPUs `4/5`.
