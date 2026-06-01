@@ -933,3 +933,11 @@
   `v1/artifacts/claim_suite_budget1p35_teacher_sequence_guarded`, preset
   `learned_hybrid_sequence_guarded_safe`, seeds `41--45`. Early logs show all
   seeds training the split-compliant learned event forecaster.
+- The teacher-sequence run also failed with the same pattern as teacher-rate:
+  deployable `1/5`, teacher `5/5`, mean deployable margin `-0.007056`.
+  Validation rows show `forecast_aware_teacher_cycle` lost the static-margin
+  guard in every seed.
+- Added `learned_hybrid_bc_guarded_safe`, which restores BC and KNN as
+  validation-guarded deployable candidates alongside event-threshold and
+  value-residual. This tests whether direct teacher imitation was excluded too
+  early from the B=1.35 candidate set.
