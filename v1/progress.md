@@ -1063,3 +1063,8 @@
   `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_guarded`, preset
   `learned_hybrid_planner_guarded_safe`, seeds `41--45`, GPUs `1/4/5`.
   Early logs show seeds `41--43` training the learned event forecaster.
+- Planner n=5 progressed through train-prior and validation-static selection.
+  Seeds `41` and `42` are collecting MPC teacher datasets with validation
+  anchor action `107`; seed `43` selected anchor action `46` and wrote a
+  512-sample teacher dataset. No errors have appeared before the action-cost /
+  transition-surrogate stages.
