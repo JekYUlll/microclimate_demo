@@ -926,3 +926,10 @@
   reported `23 passed`, a tiny `run_protocol_gate` smoke selected
   `forecast_aware_teacher_cycle` and counted it in `gate_summary.json`, and
   remote `py_compile` plus core tests also reported `23 passed`.
+- Committed the sequence-cycle implementation as
+  `a65cb74 Add teacher sequence deployable`.
+- Launched B=1.35 teacher-sequence experiment in tmux
+  `v1_budget1p35_teacher_sequence_20260601`, output root
+  `v1/artifacts/claim_suite_budget1p35_teacher_sequence_guarded`, preset
+  `learned_hybrid_sequence_guarded_safe`, seeds `41--45`. Early logs show all
+  seeds training the split-compliant learned event forecaster.
