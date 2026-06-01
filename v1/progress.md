@@ -824,3 +824,21 @@
   power `1.1520`, switch rate `0.2230`, zero warmup aborts; value-residual
   power `1.1782`, switch rate `0.6548`, zero warmup aborts; teacher power
   `0.9709`; static power `1.1660`.
+- Diagnosed the `B=1.35` failure: the teacher still changes among several
+  high-frequency four-sensor event masks (`96`, `117`, `107`, etc.), while the
+  event-threshold deployable commits to one fixed event mask and the residual
+  value/advantage models often fail validation-to-final transfer. Implemented
+  `ForecastAwareEventSupportCyclePolicy`, which defaults to the static anchor
+  but cycles over top teacher-supported event actions when the learned event
+  probability exceeds a validation-calibrated threshold.
+- Added runner support for `--include-event-support-cycle-policy` and preset
+  `learned_hybrid_event_cycle_guarded_safe`. Local dry-run confirms the preset
+  includes the event-threshold candidate plus the event-support-cycle candidate
+  under the same guarded validation selection.
+- Verification for the event-support-cycle implementation: local
+  `py_compile` passed, local tests report `21 passed`, remote `py_compile`
+  passed, and remote tests report `21 passed`.
+- The first tmux launch for `v1_budget1p35_event_cycle_20260601` failed before
+  starting because stdout was redirected to a missing directory. Relaunched
+  after creating the output directory; current remote logs show all five seeds
+  training the split-compliant learned event forecaster.

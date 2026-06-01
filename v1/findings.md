@@ -379,3 +379,9 @@
   gate: deployable `4/5`, teacher `5/5`, mean margin `+0.013532`. This supports
   an event-regime robustness claim for a sparser event distribution, but it
   does not rescue the cross-budget robustness claim.
+- The `B=1.35` teacher label distribution shifts toward several high-frequency
+  four-sensor event masks rather than the smaller event masks that worked at
+  `B=1.20`. A single event-threshold action is therefore too low-rank for this
+  regime. The next deployable candidate should preserve the forecast-triggered
+  structure but rotate through teacher-supported event masks to recover the
+  teacher's coverage diversity.

@@ -537,6 +537,74 @@ class ForecastAwareEventThresholdPolicy(V2Policy):
 
 
 @dataclass
+class ForecastAwareEventSupportCyclePolicy(V2Policy):
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    anchor_mask: tuple[bool, ...] | np.ndarray
+    event_action_indices: tuple[int, ...] | np.ndarray
+    threshold: float
+    aggregation: str = "max"
+    cycle_period: int = 1
+    preserve_warming: bool = True
+    name: str = "forecast_aware_event_support_cycle"
+
+    def __post_init__(self) -> None:
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
+        indices = [int(x) for x in np.asarray(self.event_action_indices, dtype=int).reshape(-1)]
+        self.event_action_indices = tuple(
+            int(idx) for idx in indices if 0 <= int(idx) < int(self.candidate_masks.shape[0])
+        )
+        if str(self.aggregation) not in {"max", "mean", "first"}:
+            raise ValueError(f"Unsupported event threshold aggregation: {self.aggregation}")
+        self.cycle_period = max(1, int(self.cycle_period))
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        event_score = self._event_score(forecast.probabilities)
+        if event_score < float(self.threshold) or not self.event_action_indices:
+            mask = self.anchor_mask_arr.astype(bool).copy()
+        else:
+            action_idx = self._cycle_action(env)
+            mask = self.candidate_masks[int(action_idx)].astype(bool).copy()
+        if bool(self.preserve_warming):
+            mask = self._preserve_warming(env, mask)
+        return mask
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _cycle_action(self, env: WarmupSchedulingEnv) -> int:
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        feasible_indices = [int(idx) for idx in self.event_action_indices if bool(valid[int(idx)])]
+        choices = feasible_indices if feasible_indices else list(self.event_action_indices)
+        offset = int(env.current_idx) // max(1, int(self.cycle_period))
+        return int(choices[offset % len(choices)])
+
+    def _event_score(self, probabilities: np.ndarray) -> float:
+        probs = np.asarray(probabilities, dtype=float).reshape(-1)
+        if probs.size == 0:
+            return 0.0
+        if str(self.aggregation) == "mean":
+            return float(np.mean(probs))
+        if str(self.aggregation) == "first":
+            return float(probs[0])
+        return float(np.max(probs))
+
+    def _preserve_warming(self, env: WarmupSchedulingEnv, mask: np.ndarray) -> np.ndarray:
+        out = np.asarray(mask, dtype=bool).copy()
+        for idx, sid in enumerate(env.sensor_ids):
+            runtime = env.runtimes[sid]
+            if str(runtime.mode.name).lower() == "warming" and int(runtime.warm_remaining) > 0:
+                out[int(idx)] = True
+        return out
+
+
+@dataclass
 class ForecastAwareMaskBCPolicy(V2Policy):
     model: Any
     forecast_cfg: ForecastContextConfig
