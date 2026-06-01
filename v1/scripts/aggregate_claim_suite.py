@@ -174,7 +174,7 @@ def assess_claim(
     teacher_wins = int(np.sum(main["teacher_margin"].astype(float).to_numpy() > 0.0))
     win_rate = wins / n if n else 0.0
     mean_margin = float(np.nanmean(margins))
-    required_wins = int(np.ceil(float(min_win_rate) * float(min_seeds)))
+    required_wins = int(np.ceil(float(min_win_rate) * float(n))) if n else 0
     pass_reasons = []
     fail_reasons = []
     if n >= int(min_seeds):

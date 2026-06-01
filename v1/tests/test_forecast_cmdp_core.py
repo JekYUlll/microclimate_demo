@@ -876,3 +876,43 @@ def test_budget_matrix_parse_budget_ignores_matrix_root_name():
         "budget1p20/learned_hybrid_event_guarded_safe_seed41/gate_summary.json"
     )
     assert module.parse_budget(path) == 1.20
+
+
+def test_claim_assessment_enforces_win_rate_against_actual_n():
+    module_path = ROOT / "v1" / "scripts" / "aggregate_claim_suite.py"
+    spec = importlib.util.spec_from_file_location("aggregate_claim_suite_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    runs = pd.DataFrame(
+        {
+            "preset": ["main"] * 10,
+            "deployable_margin": [1.0] * 7 + [-1.0] * 3,
+            "teacher_margin": [1.0] * 10,
+        }
+    )
+    assessment = module.assess_claim(runs, main_preset="main", min_seeds=5, min_win_rate=0.8)
+    assert assessment["required_wins"] == 8
+    assert assessment["deployable_wins"] == 7
+    assert not assessment["claim_pass"]
+
+
+def test_budget_matrix_assessment_enforces_win_rate_against_actual_n():
+    module_path = ROOT / "v1" / "scripts" / "aggregate_budget_matrix.py"
+    spec = importlib.util.spec_from_file_location("aggregate_budget_matrix_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    summary = pd.DataFrame(
+        {
+            "budget": [1.2],
+            "preset": ["main"],
+            "n": [10],
+            "deployable_wins": [7],
+            "deployable_margin_mean": [0.1],
+            "teacher_wins": [10],
+        }
+    )
+    assessment = module.assess(summary, min_seeds=5, min_win_rate=0.8)
+    assert assessment["required_wins_by_group"]["budget=1.20 preset=main"] == 8
+    assert not assessment["matrix_pass"]

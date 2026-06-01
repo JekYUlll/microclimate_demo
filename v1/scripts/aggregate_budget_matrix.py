@@ -100,11 +100,14 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def assess(summary: pd.DataFrame, *, min_seeds: int, min_win_rate: float) -> dict[str, object]:
-    required_wins = int(np.ceil(float(min_win_rate) * float(min_seeds)))
     failures: list[str] = []
     passes: list[str] = []
+    required_wins_by_group: dict[str, int] = {}
     for row in summary.to_dict(orient="records"):
         label = f"budget={float(row['budget']):.2f} preset={row['preset']}"
+        n = int(row["n"])
+        required_wins = int(np.ceil(float(min_win_rate) * float(n))) if n else 0
+        required_wins_by_group[label] = required_wins
         if int(row["n"]) < int(min_seeds):
             failures.append(f"{label}: n={int(row['n'])} < {min_seeds}")
         else:
@@ -124,7 +127,7 @@ def assess(summary: pd.DataFrame, *, min_seeds: int, min_win_rate: float) -> dic
     return {
         "matrix_pass": not failures,
         "budgets": sorted(float(x) for x in summary["budget"].unique()),
-        "required_wins": required_wins,
+        "required_wins_by_group": required_wins_by_group,
         "min_seeds": int(min_seeds),
         "min_win_rate": float(min_win_rate),
         "pass_reasons": passes,
