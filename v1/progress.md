@@ -875,3 +875,8 @@
   `v1/artifacts/claim_suite_budget1p35_event_cycle_freshness_guarded`.
   Early logs show all five seeds training the split-compliant learned event
   forecaster.
+- Added event-support-cycle calibration fields to
+  `aggregate_claim_suite.py`, so completed freshness-grid runs will expose
+  selected `selection_mode`, threshold, aggregation, period, and validation
+  objective in `claim_runs.csv`. Committed as
+  `d430d1e Include event cycle calibration in aggregates`.
