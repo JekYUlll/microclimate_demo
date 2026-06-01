@@ -70,6 +70,8 @@ def parse_args() -> argparse.Namespace:
             "learned_hybrid_event_cycle_guarded_safe",
             "learned_hybrid_rate_guarded_safe",
             "learned_hybrid_sequence_guarded_safe",
+            "learned_hybrid_teacher_mix_guarded_safe",
+            "learned_hybrid_contextual_duty_guarded_safe",
             "learned_hybrid_bc_guarded_safe",
             "learned_hybrid_planner_guarded_safe",
             "cost_support6_safe",
@@ -311,6 +313,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
         "cost_support6_safe",
@@ -372,6 +376,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
         "cost_support6_safe",
@@ -404,6 +410,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe": 6,
         "learned_hybrid_rate_guarded_safe": 6,
         "learned_hybrid_sequence_guarded_safe": 6,
+        "learned_hybrid_teacher_mix_guarded_safe": 6,
+        "learned_hybrid_contextual_duty_guarded_safe": 6,
         "learned_hybrid_bc_guarded_safe": 6,
         "learned_hybrid_planner_guarded_safe": 8,
     }.get(preset, 0)
@@ -427,6 +435,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
     }:
         common.append("--no-include-bc-policy")
@@ -451,6 +461,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
     }:
@@ -461,6 +473,8 @@ def base_command(
             "learned_hybrid_event_cycle_guarded_safe",
             "learned_hybrid_rate_guarded_safe",
             "learned_hybrid_sequence_guarded_safe",
+            "learned_hybrid_teacher_mix_guarded_safe",
+            "learned_hybrid_contextual_duty_guarded_safe",
             "learned_hybrid_bc_guarded_safe",
             "learned_hybrid_planner_guarded_safe",
         }:
@@ -509,6 +523,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
     }:
@@ -617,6 +633,7 @@ def base_command(
             "learned_hybrid_event_cycle_guarded_safe",
             "learned_hybrid_rate_guarded_safe",
             "learned_hybrid_sequence_guarded_safe",
+            "learned_hybrid_teacher_mix_guarded_safe",
         }:
             common.extend(["--advantage-residual-support-grid", "3", "5", "6", "8", "12"])
     else:
@@ -632,6 +649,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
     }:
@@ -655,6 +674,8 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_teacher_mix_guarded_safe",
+        "learned_hybrid_contextual_duty_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
         "learned_hybrid_planner_guarded_safe",
     }:
@@ -705,7 +726,7 @@ def base_command(
         )
     else:
         common.append("--no-include-event-support-cycle-policy")
-    if preset == "learned_hybrid_rate_guarded_safe":
+    if preset in {"learned_hybrid_rate_guarded_safe", "learned_hybrid_teacher_mix_guarded_safe"}:
         common.extend(
             [
                 "--include-teacher-rate-policy",
@@ -728,7 +749,32 @@ def base_command(
         )
     else:
         common.append("--no-include-teacher-rate-policy")
-    if preset == "learned_hybrid_sequence_guarded_safe":
+    if preset == "learned_hybrid_contextual_duty_guarded_safe":
+        common.extend(
+            [
+                "--include-contextual-duty-policy",
+                "--contextual-duty-support-top-k",
+                "16",
+                "--contextual-duty-blend-grid",
+                "0.5",
+                "0.75",
+                "1.0",
+                "--contextual-duty-deficit-grid",
+                "0.5",
+                "1.0",
+                "2.0",
+                "--contextual-duty-freshness-grid",
+                "0.0",
+                "0.25",
+                "--contextual-duty-power-grid",
+                "0.0",
+                "0.03",
+                "0.08",
+            ]
+        )
+    else:
+        common.append("--no-include-contextual-duty-policy")
+    if preset in {"learned_hybrid_sequence_guarded_safe", "learned_hybrid_teacher_mix_guarded_safe"}:
         common.extend(["--include-teacher-cycle-policy", "--teacher-cycle-max-lookahead", "64"])
     else:
         common.append("--no-include-teacher-cycle-policy")

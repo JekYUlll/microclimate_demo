@@ -715,6 +715,129 @@ class ForecastAwareTeacherRatePolicy(V2Policy):
 
 
 @dataclass
+class ForecastAwareContextualDutyPolicy(V2Policy):
+    model: Any
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    device: str = "auto"
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
+    anchor_mask: tuple[bool, ...] | np.ndarray | None = None
+    blend: float = 1.0
+    deficit_weight: float = 1.0
+    freshness_weight: float = 0.0
+    power_weight: float = 0.0
+    preserve_warming: bool = True
+    name: str = "forecast_aware_contextual_duty"
+
+    def __post_init__(self) -> None:
+        torch, _, _, _ = _torch_modules()
+        self.device_obj = _select_device(torch, str(self.device))
+        self.model.to(self.device_obj)
+        self.model.eval()
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        if self.candidate_masks.ndim != 2:
+            raise ValueError("candidate_masks must be 2D")
+        self.has_action_support = self.allowed_action_indices is not None
+        self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
+        self.anchor_mask_arr = (
+            np.asarray(self.anchor_mask, dtype=bool).reshape(-1) if self.anchor_mask is not None else None
+        )
+        anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr) if self.anchor_mask_arr is not None else None
+        if anchor_idx is not None:
+            self.allowed_action_mask[int(anchor_idx)] = True
+        self.reset()
+
+    def reset(self) -> None:
+        self.step_count = 0
+        self.active_counts = np.zeros(int(self.candidate_masks.shape[1]), dtype=float)
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        valid = self._apply_allowed_actions(valid)
+        valid = self._apply_warming_preservation(env, valid)
+        candidate_ids = np.flatnonzero(valid)
+        if candidate_ids.size == 0:
+            mask = (
+                self.anchor_mask_arr.astype(bool).copy()
+                if self.anchor_mask_arr is not None
+                else np.zeros(self.candidate_masks.shape[1], dtype=bool)
+            )
+        else:
+            target = self._target_rates(env)
+            mask = self.candidate_masks[int(self._select_candidate(env, candidate_ids, target))].astype(bool).copy()
+        self.active_counts += mask.astype(float)
+        self.step_count += 1
+        return mask
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _target_rates(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        state = env._state().astype(np.float32)
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        feature = append_event_forecast(state, forecast)
+        with torch.no_grad():
+            x = torch.as_tensor(feature.reshape(1, -1), dtype=torch.float32, device=self.device_obj)
+            logits = self.model(x).reshape(-1).detach().cpu().numpy().astype(float)
+        probs = 1.0 / (1.0 + np.exp(-np.clip(logits, -60.0, 60.0)))
+        if self.anchor_mask_arr is not None and self.anchor_mask_arr.shape[0] == probs.shape[0]:
+            blend = float(np.clip(self.blend, 0.0, 1.0))
+            probs = (1.0 - blend) * self.anchor_mask_arr.astype(float) + blend * probs
+        return np.clip(probs, 0.0, 1.0).astype(float)
+
+    def _select_candidate(self, env: WarmupSchedulingEnv, candidate_ids: np.ndarray, target: np.ndarray) -> int:
+        elapsed = max(1, int(self.step_count))
+        realized = self.active_counts / float(elapsed)
+        deficit = np.asarray(target, dtype=float) - realized
+        freshness = np.asarray(
+            [float(env.runtimes[sid].freshness(int(env.current_idx))) for sid in env.sensor_ids],
+            dtype=float,
+        )
+        power = np.asarray([float(spec.power_cost) for spec in env.sensor_specs], dtype=float)
+        sensor_score = (
+            np.asarray(target, dtype=float)
+            + float(self.deficit_weight) * deficit
+            + float(self.freshness_weight) * freshness
+            - float(self.power_weight) * power
+        )
+        rows = []
+        for idx in np.asarray(candidate_ids, dtype=int).reshape(-1):
+            mask = self.candidate_masks[int(idx)]
+            next_realized = (self.active_counts + mask.astype(float)) / float(elapsed + 1)
+            rate_error = float(np.mean(np.abs(np.asarray(target, dtype=float) - next_realized)))
+            rows.append((float(np.sum(sensor_score[mask])), -rate_error, -int(idx), int(idx)))
+        return int(max(rows)[3])
+
+    def _apply_warming_preservation(self, env: WarmupSchedulingEnv, valid: np.ndarray) -> np.ndarray:
+        if not bool(self.preserve_warming):
+            return np.asarray(valid, dtype=bool)
+        required = np.asarray(
+            [
+                str(env.runtimes[sid].mode.name).lower() == "warming" and int(env.runtimes[sid].warm_remaining) > 0
+                for sid in env.sensor_ids
+            ],
+            dtype=bool,
+        )
+        if not np.any(required):
+            return np.asarray(valid, dtype=bool)
+        keep_warming = np.all(self.candidate_masks[:, required], axis=1)
+        guarded = np.asarray(valid, dtype=bool) & keep_warming
+        if np.any(guarded):
+            return guarded
+        return np.asarray(valid, dtype=bool)
+
+    def _apply_allowed_actions(self, valid: np.ndarray) -> np.ndarray:
+        allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
+        if np.any(allowed):
+            return allowed
+        if bool(self.has_action_support):
+            return np.zeros_like(np.asarray(valid, dtype=bool))
+        return np.asarray(valid, dtype=bool)
+
+
+@dataclass
 class ForecastAwareMaskBCPolicy(V2Policy):
     model: Any
     forecast_cfg: ForecastContextConfig

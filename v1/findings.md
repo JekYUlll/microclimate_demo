@@ -466,3 +466,37 @@
   current env state, and learned event probability columns. This is a stronger
   paper-level algorithmic story than BC/KNN/rate/cycle because it introduces a
   causal model-predictive mechanism that can be ablated.
+- The first rollout planner exposed a target-scale issue: the action-cost
+  dataset originally normalized costs within each state so the model could rank
+  candidates for one-step residual decisions. A beam planner sums predicted
+  costs across simulated steps, so those relative per-state normalized scores
+  are not an additive objective. The corrected raw-cost planner uses a separate
+  raw candidate-cost model for planning while preserving normalized targets for
+  the one-step value-residual baseline.
+- Interpreting the raw-cost planner result should focus on whether the planner
+  itself is selected by validation and whether its rollout behavior changes
+  power/switching relative to the static anchor. If validation still selects
+  value-residual or event-threshold in most seeds, the bottleneck remains
+  validation transfer/candidate support; if rollout-value is selected but fails,
+  inspect transition error and raw-cost calibration before adding another
+  deployable head.
+- Partial raw-cost planner evidence points to a stronger mechanism diagnosis:
+  the raw planner's cost and transition models train successfully, but
+  validation still selects value-residual or event-threshold in completed seeds.
+  The selected students remain near the high-power static anchor, while the
+  privileged teacher gains margin by using lower-power, high-switch temporal
+  mixtures. The next deployable test should therefore compress teacher temporal
+  mixing directly, not merely add another one-step action-value head.
+- Full raw-cost planner and teacher-mix evidence closes two routes. The raw
+  planner and the teacher-mix suite both finished at deployable `2/5`, teacher
+  `5/5`, with identical final selected policies and margins. Teacher-rate and
+  teacher-cycle were not selected because their validation objectives/margins
+  were weaker than value-residual or event-threshold.
+- The failure of global teacher-rate is not evidence against duty-cycle
+  compression in general; it only shows that a single global target active-rate
+  vector is too low-rank. A better deployable abstraction is contextual duty:
+  learn teacher sensor active probabilities from causal forecast-aware state,
+  then use online duty-deficit/freshness/power feedback to choose among
+  teacher-supported feasible masks. This directly targets the teacher's
+  low-power high-switch behavior while remaining split-compliant and
+  deployable.

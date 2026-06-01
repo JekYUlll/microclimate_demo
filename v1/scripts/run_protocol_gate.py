@@ -55,6 +55,7 @@ from forecast_cmdp.mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, enumer
 from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareContextualDutyPolicy,
     ForecastAwareCyclePolicy,
     ForecastAwareEventSupportCyclePolicy,
     ForecastAwareEventThresholdPolicy,
@@ -218,6 +219,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teacher-rate-blend-grid", nargs="*", type=float, default=[0.5, 0.75, 1.0])
     parser.add_argument("--teacher-rate-freshness-grid", nargs="*", type=float, default=[0.0, 0.1, 0.25, 0.5])
     parser.add_argument("--teacher-rate-power-grid", nargs="*", type=float, default=[0.0, 0.03, 0.08])
+    parser.add_argument("--include-contextual-duty-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--contextual-duty-support-top-k", type=int, default=16)
+    parser.add_argument("--contextual-duty-blend-grid", nargs="*", type=float, default=[0.5, 0.75, 1.0])
+    parser.add_argument("--contextual-duty-deficit-grid", nargs="*", type=float, default=[0.0, 0.5, 1.0, 2.0])
+    parser.add_argument("--contextual-duty-freshness-grid", nargs="*", type=float, default=[0.0, 0.1, 0.25])
+    parser.add_argument("--contextual-duty-power-grid", nargs="*", type=float, default=[0.0, 0.03, 0.08])
     parser.add_argument("--include-teacher-cycle-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--teacher-cycle-max-lookahead", type=int, default=32)
     parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
@@ -632,7 +639,7 @@ def main() -> None:
     mask_bc_model = None
     mask_bc_history = None
     mask_bc_required_indices: tuple[int, ...] = ()
-    if bool(args.include_mask_bc_policy):
+    if bool(args.include_mask_bc_policy) or bool(args.include_contextual_duty_policy):
         log("training sensor-mask BC policy")
         mask_bc_model, mask_bc_history = train_mask_bc(
             teacher_dataset.features,
@@ -668,6 +675,12 @@ def main() -> None:
     teacher_rate_freshness_weight = None
     teacher_rate_power_weight = None
     teacher_rate_validation_objective = None
+    contextual_duty_support = None
+    contextual_duty_blend = None
+    contextual_duty_deficit_weight = None
+    contextual_duty_freshness_weight = None
+    contextual_duty_power_weight = None
+    contextual_duty_validation_objective = None
     if bool(args.include_event_threshold_policy):
         (
             event_threshold_action_idx,
@@ -767,6 +780,41 @@ def main() -> None:
             f"blend={teacher_rate_blend} freshness_weight={teacher_rate_freshness_weight} "
             f"power_weight={teacher_rate_power_weight} target_rates={rate_preview} "
             f"validation_objective={teacher_rate_validation_objective:.6f}"
+        )
+    if bool(args.include_contextual_duty_policy):
+        if mask_bc_model is None:
+            raise RuntimeError("contextual-duty policy requires the sensor-mask BC model")
+        (
+            contextual_duty_support,
+            contextual_duty_blend,
+            contextual_duty_deficit_weight,
+            contextual_duty_freshness_weight,
+            contextual_duty_power_weight,
+            contextual_duty_validation_objective,
+        ) = calibrate_contextual_duty_policy(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            model=mask_bc_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            labels=teacher_dataset.labels,
+            anchor_idx=selected_static_idx,
+            anchor_mask=selected_static_mask,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        log(
+            "contextual-duty calibration: "
+            f"support={list(contextual_duty_support) if contextual_duty_support is not None else None} "
+            f"blend={contextual_duty_blend} "
+            f"deficit_weight={contextual_duty_deficit_weight} "
+            f"freshness_weight={contextual_duty_freshness_weight} "
+            f"power_weight={contextual_duty_power_weight} "
+            f"validation_objective={contextual_duty_validation_objective:.6f}"
         )
     cost_model = None
     cost_history = None
@@ -1186,6 +1234,26 @@ def main() -> None:
                 anchor_mask=selected_static_mask,
             )
         )
+    if bool(args.include_contextual_duty_policy) and mask_bc_model is not None:
+        policies.append(
+            ForecastAwareContextualDutyPolicy(
+                model=mask_bc_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                device=str(args.bc_device),
+                allowed_action_indices=contextual_duty_support,
+                anchor_mask=selected_static_mask,
+                blend=float(contextual_duty_blend if contextual_duty_blend is not None else 1.0),
+                deficit_weight=float(
+                    contextual_duty_deficit_weight if contextual_duty_deficit_weight is not None else 1.0
+                ),
+                freshness_weight=float(
+                    contextual_duty_freshness_weight if contextual_duty_freshness_weight is not None else 0.0
+                ),
+                power_weight=float(contextual_duty_power_weight if contextual_duty_power_weight is not None else 0.0),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
     if bool(args.include_teacher_cycle_policy):
         policies.append(
             ForecastAwareCyclePolicy(
@@ -1374,6 +1442,7 @@ def main() -> None:
                 "forecast_aware_event_threshold",
                 "forecast_aware_event_support_cycle",
                 "forecast_aware_teacher_rate",
+                "forecast_aware_contextual_duty",
                 "forecast_aware_teacher_cycle",
                 "forecast_aware_residual_bc",
                 "forecast_aware_value_residual",
@@ -1515,6 +1584,23 @@ def main() -> None:
             "freshness_grid": [float(x) for x in args.teacher_rate_freshness_grid],
             "power_grid": [float(x) for x in args.teacher_rate_power_grid],
             "validation_objective": teacher_rate_validation_objective,
+        },
+        "contextual_duty_policy": {
+            "included": bool(args.include_contextual_duty_policy),
+            "support_top_k": int(args.contextual_duty_support_top_k),
+            "action_indices": [int(x) for x in contextual_duty_support]
+            if contextual_duty_support is not None
+            else None,
+            "blend": contextual_duty_blend,
+            "deficit_weight": contextual_duty_deficit_weight,
+            "freshness_weight": contextual_duty_freshness_weight,
+            "power_weight": contextual_duty_power_weight,
+            "blend_grid": [float(x) for x in args.contextual_duty_blend_grid],
+            "deficit_grid": [float(x) for x in args.contextual_duty_deficit_grid],
+            "freshness_grid": [float(x) for x in args.contextual_duty_freshness_grid],
+            "power_grid": [float(x) for x in args.contextual_duty_power_grid],
+            "validation_objective": contextual_duty_validation_objective,
+            "mask_bc_history": mask_bc_history,
         },
         "teacher_cycle_policy": {
             "included": bool(args.include_teacher_cycle_policy),
@@ -2582,6 +2668,98 @@ def calibrate_teacher_rate_policy(
     )
 
 
+def calibrate_contextual_duty_policy(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    labels: np.ndarray,
+    anchor_idx: int | None,
+    anchor_mask: tuple[bool, ...],
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[tuple[int, ...] | None, float | None, float | None, float | None, float | None, float]:
+    labels_arr = np.asarray(labels, dtype=int).reshape(-1)
+    if labels_arr.size == 0:
+        return None, None, None, None, None, float("inf")
+    masks = np.asarray(candidate_masks, dtype=bool)
+    support = action_support_from_labels(
+        labels_arr,
+        n_actions=int(masks.shape[0]),
+        top_k=max(1, int(args.contextual_duty_support_top_k)),
+        min_count=int(args.bc_action_support_min_count),
+        anchor_idx=anchor_idx,
+    )
+    if support is None:
+        support = tuple(int(idx) for idx in np.unique(labels_arr))
+    blends = [float(x) for x in args.contextual_duty_blend_grid] or [1.0]
+    deficit_weights = [float(x) for x in args.contextual_duty_deficit_grid] or [1.0]
+    freshness_weights = [float(x) for x in args.contextual_duty_freshness_grid] or [0.0]
+    power_weights = [float(x) for x in args.contextual_duty_power_grid] or [0.0]
+    rows: list[tuple[float, float, float, float, float, float, int]] = []
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    combo_idx = 0
+    for blend in blends:
+        for deficit_weight in deficit_weights:
+            for freshness_weight in freshness_weights:
+                for power_weight in power_weights:
+                    policy = ForecastAwareContextualDutyPolicy(
+                        model=model,
+                        candidate_masks=masks,
+                        forecast_cfg=forecast_cfg,
+                        device=str(args.bc_device),
+                        allowed_action_indices=support,
+                        anchor_mask=anchor_mask,
+                        blend=float(blend),
+                        deficit_weight=float(deficit_weight),
+                        freshness_weight=float(freshness_weight),
+                        power_weight=float(power_weight),
+                        preserve_warming=bool(args.bc_preserve_warming),
+                        name=f"forecast_aware_contextual_duty_calib_{combo_idx}",
+                    )
+                    metrics, objective = evaluate_validation_policy_metrics(
+                        args,
+                        truth=truth,
+                        sensors=sensors,
+                        constraints=constraints,
+                        cfg=cfg,
+                        oracle=oracle,
+                        policy=policy,
+                        state_columns=state_columns,
+                        sensor_ids=sensor_ids,
+                        starts=starts,
+                        seed_offset=210_000 + combo_idx * 101,
+                    )
+                    rows.append(
+                        (
+                            float(objective),
+                            float(metrics.get("power_mean", np.nan)),
+                            float(blend),
+                            float(deficit_weight),
+                            float(freshness_weight),
+                            float(power_weight),
+                            combo_idx,
+                        )
+                    )
+                    combo_idx += 1
+    rows.sort(key=lambda item: (item[0], item[1], item[6]))
+    best_objective, _, best_blend, best_deficit, best_freshness, best_power, _ = rows[0]
+    return (
+        tuple(int(x) for x in support),
+        float(best_blend),
+        float(best_deficit),
+        float(best_freshness),
+        float(best_power),
+        float(best_objective),
+    )
+
+
 def select_deployables_for_final(
     args: argparse.Namespace,
     *,
@@ -2603,6 +2781,7 @@ def select_deployables_for_final(
         "forecast_aware_event_threshold",
         "forecast_aware_event_support_cycle",
         "forecast_aware_teacher_rate",
+        "forecast_aware_contextual_duty",
         "forecast_aware_teacher_cycle",
         "forecast_aware_residual_bc",
         "forecast_aware_value_residual",

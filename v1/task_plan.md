@@ -208,9 +208,36 @@ will continue toward learned rollout-value / online planning.
 - [ ] Run server n=5 planner candidate:
   `v1_claim_b1p20_n5_planner_20260601`, root
   `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_guarded`.
-  If it improves the original seed set, scale to seeds `46--55`; if it fails,
-  inspect whether transition error, validation selection, or insufficient
-  candidate support is the cause before adding another policy head.
+  The first normalized-cost planner failed at deployable `2/5`, teacher
+  `5/5`, mean deployable margin about `+0.000346`, so it is rejected as
+  evidence but retained as a diagnostic.
+- [ ] Active correction: rerun the same n=5 planner after separating rollout
+  planning cost learning from one-step residual learning. The rollout planner
+  now trains on raw additive candidate costs rather than per-state normalized
+  ranking targets. Active server session:
+  `v1_claim_b1p20_n5_planner_raw_20260601`, root
+  `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_raw_guarded`.
+  If it improves the original seed set to at least `4/5`, scale to seeds
+  `46--55`; if it fails, inspect transition-model error, raw-cost calibration,
+  validation selection, and candidate support before adding another shallow
+  policy head.
+- [ ] Parallel correction after raw planner partial failure: test a combined
+  teacher-mix candidate suite that lets validation choose among teacher active
+  rate matching, teacher sequence cycling, event threshold, and value residual
+  under the same split. Active server session:
+  `v1_claim_b1p20_n5_teacher_mix_20260601`, root
+  `v1/artifacts/claim_suite_b1p20_n5_teacher_mix_guarded`.
+  Rationale: completed raw seeds show the teacher's advantage is mainly
+  lower-power high-switch temporal mixing, while selected students remain close
+  to high-power static anchors.
+- [x] Close the raw planner and teacher-mix candidates. Both completed at
+  deployable `2/5`, teacher `5/5`; teacher-mix reproduced the same selected
+  event/value policies because rate/cycle candidates failed validation.
+- [ ] Active correction: evaluate contextual-duty compression. This trains a
+  sensor-level teacher probability model, then deploys a closed-loop
+  duty-deficit/freshness/power controller over teacher-supported masks. It is
+  intended to recover the teacher's low-power, high-switch temporal mixture
+  without using privileged future rollouts at deployment.
 - **Status:** in_progress
 
 ## Error Log
@@ -228,3 +255,4 @@ will continue toward learned rollout-value / online planning.
 | 2026-06-01 | `aggregate_budget_matrix.py` parsed the root directory name `budget_matrix_*` as a budget tag | Tightened parsing to match only concrete tags such as `budget1p20` and added a regression test |
 | 2026-06-01 | First launch of `v1_budget1p35_event_cycle_20260601` exited immediately because stdout was redirected into a directory that did not exist | Relaunched after `mkdir -p`; no partial experiment outputs were produced by the failed launch |
 | 2026-06-01 | Event-support-cycle calibration grid gained `selection_mode`, but the stable sort tie-break still referenced the old tuple index | Fixed the sort key to use the combo id and added freshness-selection regression coverage |
+| 2026-06-01 | First rollout-value planner used per-state normalized action-cost targets, which are valid for one-step residual ranking but not additive across simulated planner steps | Kept normalized costs for value-residual, added separate raw-cost dataset/model for the rollout planner, verified locally and remotely, and launched raw-cost n=5 rerun |

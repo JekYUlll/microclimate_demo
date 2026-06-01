@@ -33,13 +33,21 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     run_rows, policy_rows = collect_suite_roots(suite_roots)
+    validation_rows = collect_validation_rows(suite_roots)
     if not run_rows:
         raise FileNotFoundError(f"No completed gate_summary.json files under {suite_roots}")
     runs = pd.DataFrame(run_rows).sort_values(["preset", "seed", "run_dir"])
     policies = pd.DataFrame(policy_rows).sort_values(["preset", "seed", "policy"]) if policy_rows else pd.DataFrame()
+    validation = (
+        pd.DataFrame(validation_rows).sort_values(["preset", "seed", "policy"])
+        if validation_rows
+        else pd.DataFrame()
+    )
     runs.to_csv(out_dir / "claim_runs.csv", index=False)
     if not policies.empty:
         policies.to_csv(out_dir / "claim_policy_metrics.csv", index=False)
+    if not validation.empty:
+        validation.to_csv(out_dir / "claim_validation_selection.csv", index=False)
 
     summary_rows = [summarize_group(group) for _, group in runs.groupby("preset", sort=True)]
     summary = pd.DataFrame(summary_rows).sort_values("preset")
@@ -68,6 +76,44 @@ def collect_suite_roots(suite_roots: list[Path]) -> tuple[list[dict[str, object]
     return run_rows, policy_rows
 
 
+def collect_validation_rows(suite_roots: list[Path]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for suite_root in suite_roots:
+        for manifest_path in sorted(suite_root.glob("*_seed*/manifest.json")):
+            run_dir = manifest_path.parent
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            preset, seed = parse_preset_seed(run_dir.name, manifest)
+            selection = manifest.get("deployable_selection", {})
+            if not isinstance(selection, dict):
+                continue
+            selected_policy = str(selection.get("selected_policy", ""))
+            validation_rows = selection.get("validation_rows", [])
+            if not isinstance(validation_rows, list):
+                continue
+            for row in validation_rows:
+                if not isinstance(row, dict):
+                    continue
+                policy = str(row.get("policy", ""))
+                rows.append(
+                    {
+                        "preset": preset,
+                        "seed": seed,
+                        "run_dir": str(run_dir),
+                        "policy": policy,
+                        "selected_policy": selected_policy,
+                        "is_selected": policy == selected_policy,
+                        "objective": nullable_float(row.get("objective")),
+                        "power_mean": nullable_float(row.get("power_mean")),
+                        "warmup_abort_count": row.get("warmup_abort_count", np.nan),
+                        "objective_margin_mean": nullable_float(row.get("objective_margin_mean")),
+                        "objective_margin_min": nullable_float(row.get("objective_margin_min")),
+                        "negative_start_count": row.get("negative_start_count", np.nan),
+                        "static_margin_guard_pass": bool(row.get("static_margin_guard_pass", False)),
+                    }
+                )
+    return rows
+
+
 def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     run_rows: list[dict[str, object]] = []
     policy_rows: list[dict[str, object]] = []
@@ -83,6 +129,9 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
         teacher_rate = manifest.get("teacher_rate_policy", {})
         if not isinstance(teacher_rate, dict):
             teacher_rate = {}
+        contextual_duty = manifest.get("contextual_duty_policy", {})
+        if not isinstance(contextual_duty, dict):
+            contextual_duty = {}
         teacher_cycle = manifest.get("teacher_cycle_policy", {})
         if not isinstance(teacher_cycle, dict):
             teacher_cycle = {}
@@ -119,6 +168,14 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "teacher_rate_freshness_weight": nullable_float(teacher_rate.get("freshness_weight")),
                 "teacher_rate_power_weight": nullable_float(teacher_rate.get("power_weight")),
                 "teacher_rate_validation_objective": nullable_float(teacher_rate.get("validation_objective")),
+                "contextual_duty_included": bool(contextual_duty.get("included", False)),
+                "contextual_duty_blend": nullable_float(contextual_duty.get("blend")),
+                "contextual_duty_deficit_weight": nullable_float(contextual_duty.get("deficit_weight")),
+                "contextual_duty_freshness_weight": nullable_float(contextual_duty.get("freshness_weight")),
+                "contextual_duty_power_weight": nullable_float(contextual_duty.get("power_weight")),
+                "contextual_duty_validation_objective": nullable_float(
+                    contextual_duty.get("validation_objective")
+                ),
                 "teacher_cycle_included": bool(teacher_cycle.get("included", False)),
                 "teacher_cycle_max_lookahead": teacher_cycle.get("max_lookahead", np.nan),
                 "rollout_value_included": bool(rollout_value.get("included", False)),
@@ -126,6 +183,9 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "rollout_value_depth": rollout_value.get("planning_depth", np.nan),
                 "rollout_value_threshold": nullable_float(rollout_value.get("advantage_threshold")),
                 "rollout_value_validation_objective": nullable_float(rollout_value.get("validation_objective")),
+                "rollout_value_cost_target": str(rollout_value.get("cost_target", "")),
+                "rollout_value_cost_loss_final": final_history_loss(rollout_value.get("cost_history")),
+                "rollout_value_transition_loss_final": final_history_loss(rollout_value.get("transition_history")),
             }
         )
         metrics_path = run_dir / "metrics_final.csv"
@@ -307,6 +367,15 @@ def nullable_float(value: object) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def final_history_loss(history: object) -> float | None:
+    if not isinstance(history, dict):
+        return None
+    losses = history.get("loss")
+    if not isinstance(losses, list) or not losses:
+        return None
+    return float(losses[-1])
 
 
 def exact_sign_test_two_sided(wins: int, n: int) -> float:

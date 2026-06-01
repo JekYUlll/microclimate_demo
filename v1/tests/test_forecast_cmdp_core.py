@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import importlib.util
+import json
+from pathlib import Path
 import sys
 
 import numpy as np
@@ -42,6 +43,7 @@ from forecast_cmdp.mpc_teacher import (
 from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareContextualDutyPolicy,
     ForecastAwareCyclePolicy,
     ForecastAwareEventSupportCyclePolicy,
     ForecastAwareEventThresholdPolicy,
@@ -639,6 +641,47 @@ def test_teacher_rate_policy_tracks_target_duty_cycle():
     assert first.tolist() != second.tolist()
 
 
+def test_contextual_duty_policy_uses_probability_deficit_feedback():
+    import torch
+
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    snow_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, True, False]], dtype=bool), axis=1))[0])
+    flux_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, False, True]], dtype=bool), axis=1))[0])
+
+    class FixedMaskModel:
+        def to(self, device):
+            self.device = device
+            return self
+
+        def eval(self):
+            return self
+
+        def __call__(self, x):
+            return torch.as_tensor([[8.0, 0.0, 0.0]], dtype=torch.float32, device=x.device)
+
+    policy = ForecastAwareContextualDutyPolicy(
+        model=FixedMaskModel(),
+        candidate_masks=masks,
+        forecast_cfg=ForecastContextConfig(horizon=3, truth_future=False),
+        device="cpu",
+        allowed_action_indices=(snow_idx, flux_idx),
+        anchor_mask=(True, False, False),
+        blend=1.0,
+        deficit_weight=2.0,
+        freshness_weight=0.0,
+        power_weight=0.0,
+        preserve_warming=False,
+    )
+    env.reset(start_idx=18)
+    first = policy.act_mask(env)
+    env.step_mask(first)
+    second = policy.act_mask(env)
+    assert first.tolist() in ([True, True, False], [True, False, True])
+    assert second.tolist() in ([True, True, False], [True, False, True])
+    assert first.tolist() != second.tolist()
+
+
 def test_action_cost_policy_smoke():
     env = make_env()
     masks = enumerate_action_masks(3, max_active=2)
@@ -982,6 +1025,45 @@ def test_claim_aggregate_collects_multiple_roots(tmp_path):
     run_rows, policy_rows = module.collect_suite_roots([tmp_path / "suite_a", tmp_path / "suite_b"])
     assert len(run_rows) == 2
     assert not policy_rows
+
+
+def test_claim_aggregate_collects_validation_selection_rows(tmp_path):
+    module_path = ROOT / "v1" / "scripts" / "aggregate_claim_suite.py"
+    spec = importlib.util.spec_from_file_location("aggregate_claim_suite_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    run_dir = tmp_path / "suite" / "main_seed41"
+    run_dir.mkdir(parents=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "seed": 41,
+                "deployable_selection": {
+                    "selected_policy": "forecast_aware_rollout_value",
+                    "validation_rows": [
+                        {
+                            "policy": "forecast_aware_rollout_value",
+                            "objective": 0.9,
+                            "power_mean": 1.1,
+                            "warmup_abort_count": 0,
+                            "objective_margin_mean": 0.02,
+                            "objective_margin_min": -0.001,
+                            "negative_start_count": 1,
+                            "static_margin_guard_pass": True,
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    rows = module.collect_validation_rows([tmp_path / "suite"])
+    assert len(rows) == 1
+    assert rows[0]["seed"] == 41
+    assert rows[0]["policy"] == "forecast_aware_rollout_value"
+    assert rows[0]["is_selected"]
+    assert rows[0]["static_margin_guard_pass"]
 
 
 def test_budget_matrix_assessment_enforces_win_rate_against_actual_n():

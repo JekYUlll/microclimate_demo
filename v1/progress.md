@@ -1068,3 +1068,148 @@
   anchor action `107`; seed `43` selected anchor action `46` and wrote a
   512-sample teacher dataset. No errors have appeared before the action-cost /
   transition-surrogate stages.
+
+## 2026-06-01 Continue: Raw-Cost Rollout Planner Follow-up
+- Recovered the v1 planning state after context compaction and confirmed the
+  current active route is learned rollout-value planning rather than another
+  action-classifier compression of the teacher.
+- The first rollout-value planner result is diagnostic only: deployable `2/5`,
+  teacher `5/5`, mean deployable margin about `+0.000346`. It failed mainly
+  because the deployed planner was not reliably selected or transferred to
+  final windows.
+- Critical implementation issue already fixed before this continuation:
+  multi-step rollout planning was using per-state normalized action-cost
+  targets. Those targets are acceptable for one-step residual ranking but are
+  not physically/additively meaningful across simulated steps. The code now
+  trains a separate raw-cost action model for the rollout planner while keeping
+  normalized labels for the value-residual policy.
+- Checked the active server run
+  `v1_claim_b1p20_n5_planner_raw_20260601`. It is running under tmux with root
+  `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_raw_guarded`.
+  Seeds `41--43` are active on GPUs `1/4/5` and have completed learned event
+  forecaster training; seed `44--45` are waiting for parallel slots. No error
+  is visible in the seed logs.
+- Added `claim_validation_selection.csv` output to
+  `v1/scripts/aggregate_claim_suite.py` so each manifest's validation
+  deployable-selection rows are expanded for posthoc diagnosis. This will show
+  whether raw rollout planning passed the static-margin guard, whether it was
+  selected, and how its validation margins compared with value-residual and
+  event-threshold alternatives.
+- Validation: local `python -m py_compile` on the v1 scripts/modules passed,
+  and `conda run -n darts python -m pytest -q
+  v1/tests/test_forecast_cmdp_core.py` reported `27 passed`.
+- Extended the same aggregate output with rollout planner diagnostic fields:
+  `rollout_value_cost_target`, `rollout_value_cost_loss_final`, and
+  `rollout_value_transition_loss_final`. This was py-compiled locally, core
+  tests still reported `27 passed`, and the updated aggregate script was synced
+  to the server.
+- Remote raw planner status: seed `42` and seed `43` completed validation-static
+  selection and moved to MPC teacher dataset collection; seed `41` is still in
+  validation-static selection. This confirms the run is progressing despite
+  sparse log output during candidate replay.
+- Added unit coverage for `collect_validation_rows`; local core tests now report
+  `28 passed`. Synced the aggregate script and updated test file to the server
+  and py-compiled both files there.
+- A first rsync attempt with `--relative` created an unintended remote
+  `v1/v1/` duplicate containing only the two synced files. Removed that
+  accidental duplicate and resent the files to their intended paths.
+- Remote raw planner status update: seeds `41--43` have now all completed the
+  MPC teacher dataset stage and are collecting the first DAgger iteration.
+  Teacher datasets contain `512` samples each; BC final accuracies are about
+  `0.992--1.0`. No failure has appeared before action-cost or transition-model
+  training.
+- Follow-up raw planner status: seeds `41--43` completed DAgger. Seed `43`
+  calibrated the event-threshold candidate and entered action-cost dataset
+  collection; seeds `41--42` are immediately behind it. The raw-cost planner
+  stage has not yet produced a cost or transition training result.
+- Raw-cost branch confirmed active on the server. Seed `43` collected the
+  standard action-cost dataset (`4163` rows), trained the value-residual cost
+  model (`final_loss=0.88746`), calibrated value residual, and started
+  `collecting raw action-cost dataset for rollout planner`. Seeds `41--42` are
+  in the same action-cost stage.
+- Seed `41--43` completed raw rollout action-cost and feature-transition
+  training. Raw cost final losses are roughly `0.155--0.183`; transition losses
+  are roughly `0.0099--0.0132`. Seed `43` calibrated rollout-value but
+  validation selected `forecast_aware_event_threshold`, then began final
+  replay. Early implication: raw-cost planning is functioning, but at least one
+  seed still does not choose the planner over the existing event/value heads.
+- First completed raw-cost seed: seed `43` wrote `gate_summary.json` with
+  `gate_pass=true`. Same-run objectives: static `1.106736`, teacher
+  `1.081973`, selected deployable `forecast_aware_event_threshold`
+  `1.103830`. The deployable margin is about `+0.00291`. This reproduces the
+  old seed43 pass pattern rather than showing rollout planner selection.
+- Partial raw-cost n=5 result is already enough to reject this candidate as the
+  next main route: seeds `41` and `42` completed and both failed
+  (`forecast_aware_value_residual` selected; margins about `-0.00391` and
+  `-0.00045`), while seed `43` passed. Even if seeds `44--45` pass, the best
+  possible result is `3/5`, below the required `4/5`.
+- Synced completed raw seeds `41--43`, ran partial aggregation locally, and
+  wrote behavior diagnostics. The partial aggregate is `1/3` deployable wins,
+  teacher `3/3`, mean deployable margin about `-0.00048`. Behavior confirms
+  the teacher uses much lower mean power (`~0.924`) and much higher switching
+  (`~1.49`) than the selected students, which remain close to the high-power
+  static anchors.
+- Added a new `learned_hybrid_teacher_mix_guarded_safe` preset to
+  `v1/scripts/run_claim_suite.py`. It combines the existing teacher active-rate
+  policy and teacher sequence-cycle policy with the event-threshold and
+  value-residual candidates under the same guarded validation selector. Local
+  validation: `py_compile`, `run_claim_suite.py --help`, and core tests
+  (`28 passed`) all passed; the updated runner was synced and py-compiled on
+  the server.
+- Launched teacher-mix B=1.20 original-seed n=5 on the idle GPU5:
+  tmux `v1_claim_b1p20_n5_teacher_mix_20260601`, root
+  `v1/artifacts/claim_suite_b1p20_n5_teacher_mix_guarded`, preset
+  `learned_hybrid_teacher_mix_guarded_safe`, seeds `41--45`, serial
+  `max_parallel=1`.
+- Verified teacher-mix seed `41` started correctly. The command includes both
+  `--include-teacher-rate-policy` and `--include-teacher-cycle-policy`, plus
+  event-threshold and value-residual candidates, all under guarded validation.
+
+## 2026-06-02 Continuation: Contextual Duty Compression
+- Checked the server after the raw-cost planner and teacher-mix runs. Both
+  suites had completed all five original B=1.20 seeds and no tmux sessions were
+  left active.
+- Synced both result roots and ran formal aggregation plus behavior
+  diagnostics.
+- Raw-cost rollout planner result:
+  `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_raw_guarded`:
+  deployable `2/5`, teacher `5/5`, mean deployable margin `+0.000707`,
+  median `-0.000446`; fail reason is deployable wins `<4`.
+- Teacher-mix result:
+  `v1/artifacts/claim_suite_b1p20_n5_teacher_mix_guarded`: deployable `2/5`,
+  teacher `5/5`, mean deployable margin `+0.000707`, median `-0.000446`.
+  Validation still selected only `forecast_aware_value_residual` or
+  `forecast_aware_event_threshold`; teacher-rate and teacher-cycle were never
+  selected.
+- Behavior diagnostics confirmed the mechanism gap: teacher mean power
+  `0.937859` and switch rate `1.388672`; validation static mean power
+  `1.177883` and switch rate `0.004102`; selected deployables remain close to
+  the high-power anchor (`power_mean` `1.138--1.162`, switch rate
+  `0.264--0.399`).
+- Implemented `ForecastAwareContextualDutyPolicy`. It uses the sensor-mask BC
+  network as a causal context-conditioned teacher active-probability model,
+  then selects feasible teacher-supported masks using target probability,
+  online duty deficit, freshness, and power penalties.
+- Added contextual-duty CLI flags, validation calibration, manifest fields,
+  aggregate fields, and claim-suite preset
+  `learned_hybrid_contextual_duty_guarded_safe`.
+- Local validation passed:
+  `python -m py_compile v1/forecast_cmdp/policy.py v1/forecast_cmdp/__init__.py
+  v1/scripts/run_protocol_gate.py v1/scripts/run_claim_suite.py
+  v1/scripts/aggregate_claim_suite.py v1/tests/test_forecast_cmdp_core.py`;
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reported `29 passed`.
+- Tiny local seed41 smoke with very short windows completed end-to-end and
+  validation selected `forecast_aware_contextual_duty`. This is only a wiring
+  check, not evidence: teacher did not beat static under the tiny saturated
+  objective, while contextual duty beat the tiny static final objective.
+- Synced the contextual-duty implementation to the GPU server. Remote
+  `py_compile` passed and remote
+  `/home/zhangzhuyu/.conda/envs/darts/bin/python -m pytest -q
+  v1/tests/test_forecast_cmdp_core.py` reported `29 passed`.
+- Launched formal B=1.20 original-seed n=5 contextual-duty suite:
+  tmux `v1_claim_b1p20_n5_contextual_duty_20260602`, root
+  `v1/artifacts/claim_suite_b1p20_n5_contextual_duty_guarded`, preset
+  `learned_hybrid_contextual_duty_guarded_safe`, seeds `41--45`, GPUs
+  `0/1/2`, `max_parallel=3`. Early logs show seeds `41--43` started
+  learned-event-forecaster training.
