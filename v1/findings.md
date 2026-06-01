@@ -385,3 +385,10 @@
   regime. The next deployable candidate should preserve the forecast-triggered
   structure but rotate through teacher-supported event masks to recover the
   teacher's coverage diversity.
+- A purely time-indexed rotation is a cheap first test, but it may be
+  misaligned with the semi-Markov observation process: the correct event-time
+  action is often the subset containing the stalest event-relevant sensors, not
+  simply the next subset in a cycle. The added `freshness` selector is a
+  low-cost correction that keeps the deployed policy causal and validation
+  calibrated while using online sensor age to choose among teacher-supported
+  event actions.

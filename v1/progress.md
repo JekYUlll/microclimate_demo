@@ -842,3 +842,20 @@
   starting because stdout was redirected to a missing directory. Relaunched
   after creating the output directory; current remote logs show all five seeds
   training the split-compliant learned event forecaster.
+
+## 2026-06-01 Continuation: B=1.35 Event-Support Repair
+- The user configured SSH key access as `ssh remote-gpu`; future server work
+  uses that host alias instead of password-based SSH.
+- Implemented the next event-support-cycle variant: validation calibration can
+  now compare `time_cycle` against `freshness` selection. `freshness` chooses
+  the teacher-supported event action whose selected sensors have the largest
+  current freshness sum, keeping the same learned-event trigger and static
+  anchor semantics.
+- Fixed a calibration bookkeeping bug introduced by that grid expansion: after
+  adding `selection_mode` to the row tuple, the stable tie-break still used the
+  old tuple slot. It now sorts by objective, power, and combo id.
+- Added regression coverage for freshness selection. Local verification:
+  `python -m py_compile v1/forecast_cmdp/*.py v1/scripts/*.py
+  v1/tests/test_forecast_cmdp_core.py` passed, and
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reported `22 passed`.

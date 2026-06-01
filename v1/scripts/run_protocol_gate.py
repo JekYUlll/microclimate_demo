@@ -207,6 +207,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--event-support-cycle-aggregation-grid", nargs="*", default=["max", "mean", "first"])
     parser.add_argument("--event-support-cycle-period-grid", nargs="*", type=int, default=[1, 2, 4])
+    parser.add_argument("--event-support-cycle-selection-grid", nargs="*", default=["time_cycle", "freshness"])
     parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--knn-k", type=int, default=5)
     parser.add_argument("--include-cost-policy", action=argparse.BooleanOptionalAction, default=False)
@@ -635,6 +636,7 @@ def main() -> None:
     event_support_cycle_value = None
     event_support_cycle_aggregation = None
     event_support_cycle_period = None
+    event_support_cycle_selection = None
     event_support_cycle_validation_objective = None
     if bool(args.include_event_threshold_policy):
         (
@@ -674,6 +676,7 @@ def main() -> None:
             event_support_cycle_value,
             event_support_cycle_aggregation,
             event_support_cycle_period,
+            event_support_cycle_selection,
             event_support_cycle_validation_objective,
         ) = calibrate_event_support_cycle_policy(
             args,
@@ -698,7 +701,8 @@ def main() -> None:
             "event-support-cycle calibration: "
             f"actions={event_support_cycle_indices} ids={cycle_ids} "
             f"aggregation={event_support_cycle_aggregation} threshold={event_support_cycle_value} "
-            f"period={event_support_cycle_period} validation_objective={event_support_cycle_validation_objective:.6f}"
+            f"period={event_support_cycle_period} selection={event_support_cycle_selection} "
+            f"validation_objective={event_support_cycle_validation_objective:.6f}"
         )
     cost_model = None
     cost_history = None
@@ -1004,6 +1008,7 @@ def main() -> None:
                 threshold=float(event_support_cycle_value if event_support_cycle_value is not None else 1.0),
                 aggregation=str(event_support_cycle_aggregation or "max"),
                 cycle_period=int(event_support_cycle_period if event_support_cycle_period is not None else 1),
+                selection_mode=str(event_support_cycle_selection or "time_cycle"),
                 preserve_warming=bool(args.bc_preserve_warming),
             )
         )
@@ -1279,9 +1284,11 @@ def main() -> None:
             "threshold": event_support_cycle_value,
             "aggregation": event_support_cycle_aggregation,
             "cycle_period": event_support_cycle_period,
+            "selection_mode": event_support_cycle_selection,
             "threshold_grid": [float(x) for x in args.event_support_cycle_grid],
             "aggregation_grid": [str(x) for x in args.event_support_cycle_aggregation_grid],
             "period_grid": [int(x) for x in args.event_support_cycle_period_grid],
+            "selection_grid": [str(x) for x in args.event_support_cycle_selection_grid],
             "validation_objective": event_support_cycle_validation_objective,
         },
         "deployable_selection": {
@@ -2087,7 +2094,7 @@ def calibrate_event_support_cycle_policy(
     anchor_mask: tuple[bool, ...],
     state_columns: tuple[str, ...],
     starts: tuple[int, ...],
-) -> tuple[tuple[int, ...] | None, float | None, str | None, int | None, float]:
+) -> tuple[tuple[int, ...] | None, float | None, str | None, int | None, str | None, float]:
     support = action_support_from_labels(
         labels,
         n_actions=int(candidate_masks.shape[0]),
@@ -2096,59 +2103,72 @@ def calibrate_event_support_cycle_policy(
         anchor_idx=None,
     )
     if support is None:
-        return None, None, None, None, float("inf")
+        return None, None, None, None, None, float("inf")
     event_actions = tuple(int(idx) for idx in support if anchor_idx is None or int(idx) != int(anchor_idx))
     if not event_actions and anchor_idx is not None:
         event_actions = (int(anchor_idx),)
     thresholds = [float(x) for x in args.event_support_cycle_grid] or [0.5]
     aggregations = [str(x) for x in args.event_support_cycle_aggregation_grid] or ["max"]
     periods = [max(1, int(x)) for x in args.event_support_cycle_period_grid] or [1]
-    rows: list[tuple[float, float, float, str, int, int]] = []
+    selection_modes = [str(x) for x in args.event_support_cycle_selection_grid] or ["time_cycle"]
+    rows: list[tuple[float, float, float, str, int, str, int]] = []
     sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
     combo_idx = 0
     for aggregation in aggregations:
         if aggregation not in {"max", "mean", "first"}:
             raise ValueError(f"Unsupported event-support-cycle aggregation: {aggregation}")
-        for period in periods:
-            for threshold in thresholds:
-                policy = ForecastAwareEventSupportCyclePolicy(
-                    candidate_masks=candidate_masks,
-                    forecast_cfg=forecast_cfg,
-                    anchor_mask=anchor_mask,
-                    event_action_indices=event_actions,
-                    threshold=float(threshold),
-                    aggregation=str(aggregation),
-                    cycle_period=int(period),
-                    preserve_warming=bool(args.bc_preserve_warming),
-                    name=f"forecast_aware_event_support_cycle_calib_{combo_idx}",
-                )
-                metrics, objective = evaluate_validation_policy_metrics(
-                    args,
-                    truth=truth,
-                    sensors=sensors,
-                    constraints=constraints,
-                    cfg=cfg,
-                    oracle=oracle,
-                    policy=policy,
-                    state_columns=state_columns,
-                    sensor_ids=sensor_ids,
-                    starts=starts,
-                    seed_offset=180_000 + combo_idx * 101,
-                )
-                rows.append(
-                    (
-                        float(objective),
-                        float(metrics.get("power_mean", np.nan)),
-                        float(threshold),
-                        str(aggregation),
-                        int(period),
-                        combo_idx,
+        for selection_mode in selection_modes:
+            if selection_mode not in {"time_cycle", "freshness"}:
+                raise ValueError(f"Unsupported event-support-cycle selection mode: {selection_mode}")
+            for period in periods:
+                for threshold in thresholds:
+                    policy = ForecastAwareEventSupportCyclePolicy(
+                        candidate_masks=candidate_masks,
+                        forecast_cfg=forecast_cfg,
+                        anchor_mask=anchor_mask,
+                        event_action_indices=event_actions,
+                        threshold=float(threshold),
+                        aggregation=str(aggregation),
+                        cycle_period=int(period),
+                        selection_mode=str(selection_mode),
+                        preserve_warming=bool(args.bc_preserve_warming),
+                        name=f"forecast_aware_event_support_cycle_calib_{combo_idx}",
                     )
-                )
-                combo_idx += 1
-    rows.sort(key=lambda item: (item[0], item[1], item[5]))
-    best_objective, _, best_threshold, best_aggregation, best_period, _ = rows[0]
-    return event_actions, float(best_threshold), str(best_aggregation), int(best_period), float(best_objective)
+                    metrics, objective = evaluate_validation_policy_metrics(
+                        args,
+                        truth=truth,
+                        sensors=sensors,
+                        constraints=constraints,
+                        cfg=cfg,
+                        oracle=oracle,
+                        policy=policy,
+                        state_columns=state_columns,
+                        sensor_ids=sensor_ids,
+                        starts=starts,
+                        seed_offset=180_000 + combo_idx * 101,
+                    )
+                    rows.append(
+                        (
+                            float(objective),
+                            float(metrics.get("power_mean", np.nan)),
+                            float(threshold),
+                            str(aggregation),
+                            int(period),
+                            str(selection_mode),
+                            combo_idx,
+                        )
+                    )
+                    combo_idx += 1
+    rows.sort(key=lambda item: (item[0], item[1], item[6]))
+    best_objective, _, best_threshold, best_aggregation, best_period, best_selection, _ = rows[0]
+    return (
+        event_actions,
+        float(best_threshold),
+        str(best_aggregation),
+        int(best_period),
+        str(best_selection),
+        float(best_objective),
+    )
 
 
 def select_deployables_for_final(

@@ -584,6 +584,34 @@ def test_event_support_cycle_policy_rotates_teacher_supported_actions():
     assert second in ([True, True, False], [True, False, True])
 
 
+def test_event_support_cycle_policy_can_select_by_freshness():
+    env = make_env()
+    truth = env.truth_df.copy()
+    truth["learned_event_p_h1"] = 0.9
+    env.truth_df = truth
+    masks = enumerate_action_masks(3, max_active=2)
+    anchor = (True, False, False)
+    snow_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, True, False]], dtype=bool), axis=1))[0])
+    flux_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, False, True]], dtype=bool), axis=1))[0])
+    policy = ForecastAwareEventSupportCyclePolicy(
+        candidate_masks=masks,
+        forecast_cfg=ForecastContextConfig(
+            horizon=1,
+            learned_event_probability_columns=("learned_event_p_h1",),
+        ),
+        anchor_mask=anchor,
+        event_action_indices=(flux_idx, snow_idx),
+        threshold=0.5,
+        aggregation="max",
+        selection_mode="freshness",
+    )
+    env.reset(start_idx=50)
+    env.runtimes["met"].last_observed_step = 50
+    env.runtimes["snow"].last_observed_step = None
+    env.runtimes["flux"].last_observed_step = 50
+    assert policy.act_mask(env).tolist() == [True, True, False]
+
+
 def test_action_cost_policy_smoke():
     env = make_env()
     masks = enumerate_action_masks(3, max_active=2)

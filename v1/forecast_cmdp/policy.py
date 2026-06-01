@@ -545,6 +545,7 @@ class ForecastAwareEventSupportCyclePolicy(V2Policy):
     threshold: float
     aggregation: str = "max"
     cycle_period: int = 1
+    selection_mode: str = "time_cycle"
     preserve_warming: bool = True
     name: str = "forecast_aware_event_support_cycle"
 
@@ -557,6 +558,8 @@ class ForecastAwareEventSupportCyclePolicy(V2Policy):
         )
         if str(self.aggregation) not in {"max", "mean", "first"}:
             raise ValueError(f"Unsupported event threshold aggregation: {self.aggregation}")
+        if str(self.selection_mode) not in {"time_cycle", "freshness"}:
+            raise ValueError(f"Unsupported event support selection mode: {self.selection_mode}")
         self.cycle_period = max(1, int(self.cycle_period))
 
     def reset(self) -> None:
@@ -582,6 +585,20 @@ class ForecastAwareEventSupportCyclePolicy(V2Policy):
         valid = feasible_candidate_mask(env, self.candidate_masks)
         feasible_indices = [int(idx) for idx in self.event_action_indices if bool(valid[int(idx)])]
         choices = feasible_indices if feasible_indices else list(self.event_action_indices)
+        if str(self.selection_mode) == "freshness":
+            freshness = np.asarray(
+                [float(env.runtimes[sid].freshness(int(env.current_idx))) for sid in env.sensor_ids],
+                dtype=float,
+            )
+            scores = [
+                (
+                    float(np.sum(freshness[self.candidate_masks[int(idx)]])),
+                    -int(idx),
+                    int(idx),
+                )
+                for idx in choices
+            ]
+            return int(max(scores)[2])
         offset = int(env.current_idx) // max(1, int(self.cycle_period))
         return int(choices[offset % len(choices)])
 

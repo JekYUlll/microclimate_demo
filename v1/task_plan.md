@@ -165,7 +165,9 @@ will continue toward learned rollout-value / online planning.
   passed at `4/5` with positive mean margin.
 - [ ] Active correction for the `B=1.35` failure: test an
   event-support-cycle deployable that rotates over teacher-supported event
-  actions instead of switching to one fixed event mask.
+  actions instead of switching to one fixed event mask. The initial
+  time-cycle variant is running; if it fails, the next tested variant uses a
+  freshness-based selector over the same teacher-supported action set.
 - **Status:** in_progress
 
 ## Error Log
@@ -182,3 +184,4 @@ will continue toward learned rollout-value / online planning.
 | 2026-06-01 | New v1 input-prep smoke initially could not find AntAWS data because the default path inherited the old script's working-directory assumption | Changed the default to `data/AntAWS/3_hourly` and added path resolution against the project root and archived framework root |
 | 2026-06-01 | `aggregate_budget_matrix.py` parsed the root directory name `budget_matrix_*` as a budget tag | Tightened parsing to match only concrete tags such as `budget1p20` and added a regression test |
 | 2026-06-01 | First launch of `v1_budget1p35_event_cycle_20260601` exited immediately because stdout was redirected into a directory that did not exist | Relaunched after `mkdir -p`; no partial experiment outputs were produced by the failed launch |
+| 2026-06-01 | Event-support-cycle calibration grid gained `selection_mode`, but the stable sort tie-break still referenced the old tuple index | Fixed the sort key to use the combo id and added freshness-selection regression coverage |
