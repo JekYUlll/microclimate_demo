@@ -2082,7 +2082,7 @@ def select_deployables_for_final(
                     state_columns=state_columns,
                     sensor_ids=sensor_ids,
                     starts=(int(start),),
-                    seed_offset=115_000 + idx * 1009 + int(start_idx) * 101,
+                    seed_offset=100_000 + int(start_idx) * 101,
                 )
                 candidate_start_objectives.append(float(start_objective))
             margins = np.asarray(static_start_objectives, dtype=float) - np.asarray(

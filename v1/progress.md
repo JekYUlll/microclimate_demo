@@ -733,3 +733,17 @@
   `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
   reported `19 passed`; dry-run verified the new preset includes
   `--include-event-threshold-policy`.
+- Committed the guarded event-threshold route as
+  `8ed44e0 Add guarded event-threshold residual route`.
+- Synced `v1/` source to the server excluding `v1/artifacts/`; remote
+  `darts` checks passed with `19 passed`.
+- Launched server tmux
+  `v1_claim_learned_hybrid_event_guarded_n5_20260601`, preset
+  `learned_hybrid_event_guarded_safe`, output root
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_hybrid_event_guarded`.
+- Local follow-up fix after launch: changed guarded per-start margin
+  comparison to use the same validation-start seed offset for static and
+  candidate policies, making the guard a paired comparison under stochastic
+  sensor noise. Local `py_compile` and core tests still report `19 passed`.
+  The already-running remote job uses the previous guard implementation; if
+  its result is ambiguous or fails, rerun after syncing this paired-seed fix.
