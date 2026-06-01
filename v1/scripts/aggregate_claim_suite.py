@@ -62,6 +62,9 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
         manifest_path = run_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
         preset, seed = parse_preset_seed(run_dir.name, manifest)
+        event_support_cycle = manifest.get("event_support_cycle_policy", {})
+        if not isinstance(event_support_cycle, dict):
+            event_support_cycle = {}
         static_objective = float(summary["validation_selected_static_objective"])
         teacher_objective = nullable_float(summary.get("teacher_reference_objective"))
         deployable_objective = nullable_float(summary.get("best_deployable_objective"))
@@ -81,6 +84,13 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "teacher_beats_static": bool(summary.get("teacher_beats_static", False)),
                 "gate_pass": bool(summary.get("gate_pass", False)),
                 "best_deployable_policy": str(summary.get("best_deployable_policy", "")),
+                "event_support_cycle_selection_mode": str(event_support_cycle.get("selection_mode", "")),
+                "event_support_cycle_threshold": nullable_float(event_support_cycle.get("threshold")),
+                "event_support_cycle_aggregation": str(event_support_cycle.get("aggregation", "")),
+                "event_support_cycle_period": event_support_cycle.get("cycle_period", np.nan),
+                "event_support_cycle_validation_objective": nullable_float(
+                    event_support_cycle.get("validation_objective")
+                ),
             }
         )
         metrics_path = run_dir / "metrics_final.csv"
