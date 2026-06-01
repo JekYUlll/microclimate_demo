@@ -973,3 +973,9 @@
   preset `learned_hybrid_event_guarded_safe`, seeds `46--55`,
   `B=1.20`, `startup_peak_budget=1.60`, three-way parallel on GPUs
   `1/4/5`, with CUDA oracle/BC execution.
+- Fixed an aggregate-gating bug before interpreting expanded-n results:
+  `aggregate_claim_suite.py` and `aggregate_budget_matrix.py` previously
+  computed required wins from `min_seeds`, which is correct at n=5 but too
+  permissive for n>5. They now compute required wins from the actual group
+  size. Local and remote core tests both report `25 passed`. Committed as
+  `4a7a74d Fix extended claim win-rate gate`.
