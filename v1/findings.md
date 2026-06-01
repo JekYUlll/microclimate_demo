@@ -422,3 +422,17 @@
   enough that deployable forecast-triggered deviations do not transfer
   reliably. The paper path should state this as a boundary and strengthen the
   supported `B=1.20` claim with more seeds and perturbation evidence.
+- The first B=1.20 seed-extension is also not strong enough for the original
+  robustness claim. On seeds `46--55`, the event/value guarded route wins
+  `6/10`; combined with the original seeds `41--45`, it wins `10/15`, below
+  the required `12/15` for an 80% seed-win criterion. The mean deployable
+  margin remains positive, and the privileged teacher wins `14/15`, so the
+  dynamic forecasting objective is still valid. The failure is deployable
+  transfer and validation selection, not absence of dynamic value.
+- The failures are split across the two selected deployable families:
+  event-threshold wins `3/6` on the combined set of selected event-threshold
+  seeds in the extension, and value-residual wins `3/5` in the extension.
+  Therefore simply preferring one of these two heads is not enough. The active
+  correction is to expand the guarded candidate set with direct BC/KNN teacher
+  imitation and let validation choose; early completed seeds `46--47` both
+  pass under that route.

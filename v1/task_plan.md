@@ -185,6 +185,13 @@ will continue toward learned rollout-value / online planning.
 - [ ] Active scaling pivot: expand the supported `B=1.20` operating point to
   additional seeds using v1-generated inputs, then aggregate old and new runs
   to determine whether the main forecast-triggered claim survives beyond n=5.
+- [ ] Scaling result: the event/value guarded route does not survive the
+  stricter n=15 seed-win criterion. Combined B=1.20 result is deployable
+  `10/15`, teacher `14/15`, positive mean margin, but below the required
+  `12/15` deployable wins.
+- [ ] Active correction: evaluate the B=1.20 BC/KNN guarded hybrid extension.
+  Early seeds `46--47` pass, but the full n=10 corrective result is still
+  running.
 - **Status:** in_progress
 
 ## Error Log

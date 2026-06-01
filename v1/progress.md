@@ -995,3 +995,17 @@
   `v1/artifacts/claim_suite_b1p20_ext_learned_hybrid_bc_guarded_46_55`,
   preset `learned_hybrid_bc_guarded_safe`, seeds `46--55`, two-way parallel
   on GPUs `4/5`.
+- The B=1.20 extension event/value route completed and was aggregated:
+  root `v1/artifacts/claim_suite_b1p20_ext_learned_hybrid_event_guarded_46_55`,
+  deployable `6/10`, teacher `9/10`, mean deployable margin `+0.001604`,
+  sign-test `p=0.753906`; fail reason is deployable wins `< 8`.
+- Combined with the original paired n=5 B=1.20 suite, the strict n=15
+  assessment is deployable `10/15`, teacher `14/15`, mean deployable margin
+  `+0.002322`, sign-test `p=0.301758`; fail reason is deployable wins
+  `< 12`. This means the current event/value guarded route supports teacher
+  dynamic value and positive average margin, but not the desired 80% seed-win
+  robustness claim.
+- The BC/KNN guarded correction has early completed seeds `46--47`, both
+  passing. Seed46 improved from event/value margin `+0.000652` to BC-guarded
+  margin `+0.004303`; seed47 remains `+0.001845`. The rest of the corrective
+  suite is still running.
