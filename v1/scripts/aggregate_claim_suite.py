@@ -65,6 +65,9 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
         event_support_cycle = manifest.get("event_support_cycle_policy", {})
         if not isinstance(event_support_cycle, dict):
             event_support_cycle = {}
+        teacher_rate = manifest.get("teacher_rate_policy", {})
+        if not isinstance(teacher_rate, dict):
+            teacher_rate = {}
         static_objective = float(summary["validation_selected_static_objective"])
         teacher_objective = nullable_float(summary.get("teacher_reference_objective"))
         deployable_objective = nullable_float(summary.get("best_deployable_objective"))
@@ -91,6 +94,10 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "event_support_cycle_validation_objective": nullable_float(
                     event_support_cycle.get("validation_objective")
                 ),
+                "teacher_rate_blend": nullable_float(teacher_rate.get("blend")),
+                "teacher_rate_freshness_weight": nullable_float(teacher_rate.get("freshness_weight")),
+                "teacher_rate_power_weight": nullable_float(teacher_rate.get("power_weight")),
+                "teacher_rate_validation_objective": nullable_float(teacher_rate.get("validation_objective")),
             }
         )
         metrics_path = run_dir / "metrics_final.csv"

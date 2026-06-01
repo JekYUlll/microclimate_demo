@@ -169,6 +169,11 @@ will continue toward learned rollout-value / online planning.
   time-cycle variant failed (`1/5`, mean margin `-0.008706`) while teacher
   stayed `5/5`; the active follow-up is the freshness-selection grid over the
   same teacher-supported action set.
+- [ ] Next correction: test a teacher-rate deployable for `B=1.35`. The
+  freshness event-support grid also failed (`1/5`), because validation did not
+  select event-support-cycle in most seeds. The teacher's successful behavior
+  is closer to duty-cycle power saving over teacher-supported masks than to a
+  single event action.
 - **Status:** in_progress
 
 ## Error Log

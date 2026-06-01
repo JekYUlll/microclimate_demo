@@ -44,6 +44,7 @@ from forecast_cmdp.policy import (
     ForecastAwareEventThresholdPolicy,
     ForecastAwareKNNPolicy,
     ForecastAwareMaskBCPolicy,
+    ForecastAwareTeacherRatePolicy,
     load_bc_policy_checkpoint,
     save_bc_policy_checkpoint,
     train_bc_classifier,
@@ -610,6 +611,29 @@ def test_event_support_cycle_policy_can_select_by_freshness():
     env.runtimes["snow"].last_observed_step = None
     env.runtimes["flux"].last_observed_step = 50
     assert policy.act_mask(env).tolist() == [True, True, False]
+
+
+def test_teacher_rate_policy_tracks_target_duty_cycle():
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    snow_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, True, False]], dtype=bool), axis=1))[0])
+    flux_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, False, True]], dtype=bool), axis=1))[0])
+    policy = ForecastAwareTeacherRatePolicy(
+        candidate_masks=masks,
+        target_rates=(1.0, 0.5, 0.5),
+        allowed_action_indices=(snow_idx, flux_idx),
+        freshness_weight=0.0,
+        power_weight=0.0,
+        preserve_warming=False,
+        anchor_mask=(True, False, False),
+    )
+    env.reset(start_idx=18)
+    first = policy.act_mask(env)
+    env.step_mask(first)
+    second = policy.act_mask(env)
+    assert first.tolist() in ([True, True, False], [True, False, True])
+    assert second.tolist() in ([True, True, False], [True, False, True])
+    assert first.tolist() != second.tolist()
 
 
 def test_action_cost_policy_smoke():

@@ -880,3 +880,29 @@
   selected `selection_mode`, threshold, aggregation, period, and validation
   objective in `claim_runs.csv`. Committed as
   `d430d1e Include event cycle calibration in aggregates`.
+- Completed and aggregated the freshness-grid B=1.35 run
+  `v1/artifacts/claim_suite_budget1p35_event_cycle_freshness_guarded`. It was
+  numerically identical to the time-cycle run: deployable `1/5`, teacher
+  `5/5`, mean deployable margin `-0.008706`.
+- Manifest inspection showed all five event-support-cycle calibrations selected
+  `selection_mode=freshness`, but guarded validation selected other
+  deployables in final policy selection. Event-support-cycle itself lost the
+  static-margin guard in most seeds.
+- Behavior diagnostics show the B=1.35 teacher is not mainly a single
+  event-triggered switch. It keeps `met_station_core` always on, keeps
+  `laser_disdrometer` active most of the time, and duty-cycles
+  `surface_temp_ir`, `fc4_flux`, `radiometer_basic`, and occasional
+  `ultrasonic`/`shielded` sensors, cutting mean power to about `1.08` vs the
+  static anchor's `1.206`.
+- Implemented `ForecastAwareTeacherRatePolicy`, a deployable duty-cycle policy
+  that estimates per-sensor target active rates from training teacher labels
+  and chooses among teacher-supported feasible masks by duty deficit,
+  freshness, and power cost. Added the `learned_hybrid_rate_guarded_safe`
+  preset and aggregate fields for teacher-rate calibration.
+- Verification: local `py_compile` passed, local core tests report
+  `23 passed`, and a tiny `run_protocol_gate` smoke with
+  `--include-teacher-rate-policy` completed end to end and correctly counted
+  `forecast_aware_teacher_rate` as a deployable in `gate_summary.json`.
+- Remote verification after sync also passed: `python -m py_compile ...` and
+  `python -m pytest -q v1/tests/test_forecast_cmdp_core.py` reported
+  `23 passed`.

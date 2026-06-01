@@ -622,6 +622,99 @@ class ForecastAwareEventSupportCyclePolicy(V2Policy):
 
 
 @dataclass
+class ForecastAwareTeacherRatePolicy(V2Policy):
+    candidate_masks: np.ndarray
+    target_rates: tuple[float, ...] | np.ndarray
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
+    freshness_weight: float = 0.0
+    power_weight: float = 0.0
+    preserve_warming: bool = True
+    anchor_mask: tuple[bool, ...] | np.ndarray | None = None
+    name: str = "forecast_aware_teacher_rate"
+
+    def __post_init__(self) -> None:
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.target_rates_arr = np.clip(np.asarray(self.target_rates, dtype=float).reshape(-1), 0.0, 1.0)
+        if self.candidate_masks.ndim != 2:
+            raise ValueError("candidate_masks must be 2D")
+        if self.target_rates_arr.shape[0] != self.candidate_masks.shape[1]:
+            raise ValueError("target_rates must match candidate mask sensor width")
+        raw_allowed = () if self.allowed_action_indices is None else self.allowed_action_indices
+        allowed = tuple(int(x) for x in np.asarray(raw_allowed, dtype=int).reshape(-1))
+        self.allowed_action_indices = tuple(
+            int(idx) for idx in allowed if 0 <= int(idx) < int(self.candidate_masks.shape[0])
+        )
+        self.anchor_mask_arr = (
+            np.asarray(self.anchor_mask, dtype=bool).reshape(-1) if self.anchor_mask is not None else None
+        )
+        self.reset()
+
+    def reset(self) -> None:
+        self.step_count = 0
+        self.active_counts = np.zeros(int(self.candidate_masks.shape[1]), dtype=float)
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        if self.allowed_action_indices:
+            allowed = np.zeros_like(valid, dtype=bool)
+            allowed[np.asarray(self.allowed_action_indices, dtype=int)] = True
+            valid = valid & allowed
+        valid = self._apply_warming_preservation(env, valid)
+        candidate_ids = np.flatnonzero(valid)
+        if candidate_ids.size == 0:
+            mask = (
+                self.anchor_mask_arr.astype(bool).copy()
+                if self.anchor_mask_arr is not None
+                else np.zeros(self.candidate_masks.shape[1], dtype=bool)
+            )
+        else:
+            mask = self.candidate_masks[int(self._select_candidate(env, candidate_ids))].astype(bool).copy()
+        self.active_counts += mask.astype(float)
+        self.step_count += 1
+        return mask
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _select_candidate(self, env: WarmupSchedulingEnv, candidate_ids: np.ndarray) -> int:
+        elapsed = max(1, int(self.step_count))
+        realized = self.active_counts / float(elapsed)
+        deficit = self.target_rates_arr - realized
+        freshness = np.asarray(
+            [float(env.runtimes[sid].freshness(int(env.current_idx))) for sid in env.sensor_ids],
+            dtype=float,
+        )
+        power = np.asarray([float(spec.power_cost) for spec in env.sensor_specs], dtype=float)
+        sensor_score = deficit + float(self.freshness_weight) * freshness - float(self.power_weight) * power
+        rows = []
+        for idx in np.asarray(candidate_ids, dtype=int).reshape(-1):
+            mask = self.candidate_masks[int(idx)]
+            next_realized = (self.active_counts + mask.astype(float)) / float(elapsed + 1)
+            rate_error = float(np.mean(np.abs(self.target_rates_arr - next_realized)))
+            rows.append((float(np.sum(sensor_score[mask])), -rate_error, -int(idx), int(idx)))
+        return int(max(rows)[3])
+
+    def _apply_warming_preservation(self, env: WarmupSchedulingEnv, valid: np.ndarray) -> np.ndarray:
+        if not bool(self.preserve_warming):
+            return np.asarray(valid, dtype=bool)
+        required = np.asarray(
+            [
+                str(env.runtimes[sid].mode.name).lower() == "warming" and int(env.runtimes[sid].warm_remaining) > 0
+                for sid in env.sensor_ids
+            ],
+            dtype=bool,
+        )
+        if not np.any(required):
+            return np.asarray(valid, dtype=bool)
+        keep_warming = np.all(self.candidate_masks[:, required], axis=1)
+        guarded = np.asarray(valid, dtype=bool) & keep_warming
+        if np.any(guarded):
+            return guarded
+        return np.asarray(valid, dtype=bool)
+
+
+@dataclass
 class ForecastAwareMaskBCPolicy(V2Policy):
     model: Any
     forecast_cfg: ForecastContextConfig

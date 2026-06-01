@@ -68,6 +68,7 @@ def parse_args() -> argparse.Namespace:
             "learned_hybrid_residual_guarded_safe",
             "learned_hybrid_event_guarded_safe",
             "learned_hybrid_event_cycle_guarded_safe",
+            "learned_hybrid_rate_guarded_safe",
             "cost_support6_safe",
             "no_dagger",
             "oracle_objective",
@@ -305,6 +306,7 @@ def base_command(
         "learned_hybrid_residual_guarded_safe",
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
         "cost_support6_safe",
         "no_dagger",
         "no_anchor_guard",
@@ -362,6 +364,7 @@ def base_command(
         "learned_hybrid_residual_guarded_safe",
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
         "cost_support6_safe",
     }:
         common.append("--bc-preserve-warming")
@@ -390,6 +393,7 @@ def base_command(
         "learned_hybrid_residual_guarded_safe": 6,
         "learned_hybrid_event_guarded_safe": 6,
         "learned_hybrid_event_cycle_guarded_safe": 6,
+        "learned_hybrid_rate_guarded_safe": 6,
     }.get(preset, 0)
     common.extend(["--bc-action-support-top-k", str(support_top_k)])
     if preset == "support_calib_safe":
@@ -409,6 +413,7 @@ def base_command(
         "learned_hybrid_residual_guarded_safe",
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
     }:
         common.append("--no-include-bc-policy")
     else:
@@ -430,12 +435,14 @@ def base_command(
         "learned_hybrid_residual_guarded_safe",
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
     }:
         common.extend(["--deployable-selection", "validation"])
         if preset in {
             "learned_hybrid_residual_guarded_safe",
             "learned_hybrid_event_guarded_safe",
             "learned_hybrid_event_cycle_guarded_safe",
+            "learned_hybrid_rate_guarded_safe",
         }:
             common.extend(
                 [
@@ -480,6 +487,7 @@ def base_command(
         "learned_hybrid_residual_guarded_safe",
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
     }:
         common.extend(
             [
@@ -556,6 +564,7 @@ def base_command(
             "learned_hybrid_residual_guarded_safe",
             "learned_hybrid_event_guarded_safe",
             "learned_hybrid_event_cycle_guarded_safe",
+            "learned_hybrid_rate_guarded_safe",
         }:
             common.extend(["--advantage-residual-support-grid", "3", "5", "6", "8", "12"])
     else:
@@ -569,6 +578,7 @@ def base_command(
         "learned_hybrid_residual_guarded_safe",
         "learned_hybrid_event_guarded_safe",
         "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
     }:
         common.extend(
             [
@@ -585,7 +595,11 @@ def base_command(
         common.extend(["--include-cost-policy", "--cost-epochs", "50", "--cost-hidden-dim", "256"])
     else:
         common.append("--no-include-cost-policy")
-    if preset in {"learned_hybrid_event_guarded_safe", "learned_hybrid_event_cycle_guarded_safe"}:
+    if preset in {
+        "learned_hybrid_event_guarded_safe",
+        "learned_hybrid_event_cycle_guarded_safe",
+        "learned_hybrid_rate_guarded_safe",
+    }:
         common.extend(
             [
                 "--include-event-threshold-policy",
@@ -633,6 +647,29 @@ def base_command(
         )
     else:
         common.append("--no-include-event-support-cycle-policy")
+    if preset == "learned_hybrid_rate_guarded_safe":
+        common.extend(
+            [
+                "--include-teacher-rate-policy",
+                "--teacher-rate-support-top-k",
+                "16",
+                "--teacher-rate-blend-grid",
+                "0.5",
+                "0.75",
+                "1.0",
+                "--teacher-rate-freshness-grid",
+                "0.0",
+                "0.1",
+                "0.25",
+                "0.5",
+                "--teacher-rate-power-grid",
+                "0.0",
+                "0.03",
+                "0.08",
+            ]
+        )
+    else:
+        common.append("--no-include-teacher-rate-policy")
 
     if preset in {"no_dagger", "value_residual_no_dagger"}:
         common.extend(["--dagger-iters", "0"])

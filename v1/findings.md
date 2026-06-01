@@ -397,3 +397,10 @@
   The event-support set itself is not enough; the deployed policy needs a
   state-dependent choice within that support. Online freshness is the next
   lowest-cost causal state signal to test before introducing a larger planner.
+- The freshness-grid result is also negative despite selecting freshness in
+  all five event-support-cycle calibrations. The stronger diagnosis is that
+  B=1.35 teacher value comes from duty-cycle power saving across several
+  teacher-supported masks, not from event-triggered selection of one or a few
+  high-power event masks. A deployable policy should therefore target teacher
+  sensor active rates and adjust online by duty deficit/freshness, rather than
+  only thresholding event probability.

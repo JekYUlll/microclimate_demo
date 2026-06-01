@@ -57,6 +57,7 @@ from forecast_cmdp.policy import (
     ForecastAwareKNNPolicy,
     ForecastAwareMaskBCPolicy,
     ForecastAwareResidualBCPolicy,
+    ForecastAwareTeacherRatePolicy,
     save_bc_policy_checkpoint,
     train_bc_classifier,
     train_deviation_gate,
@@ -208,6 +209,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--event-support-cycle-aggregation-grid", nargs="*", default=["max", "mean", "first"])
     parser.add_argument("--event-support-cycle-period-grid", nargs="*", type=int, default=[1, 2, 4])
     parser.add_argument("--event-support-cycle-selection-grid", nargs="*", default=["time_cycle", "freshness"])
+    parser.add_argument("--include-teacher-rate-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--teacher-rate-support-top-k", type=int, default=12)
+    parser.add_argument("--teacher-rate-blend-grid", nargs="*", type=float, default=[0.5, 0.75, 1.0])
+    parser.add_argument("--teacher-rate-freshness-grid", nargs="*", type=float, default=[0.0, 0.1, 0.25, 0.5])
+    parser.add_argument("--teacher-rate-power-grid", nargs="*", type=float, default=[0.0, 0.03, 0.08])
     parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--knn-k", type=int, default=5)
     parser.add_argument("--include-cost-policy", action=argparse.BooleanOptionalAction, default=False)
@@ -638,6 +644,12 @@ def main() -> None:
     event_support_cycle_period = None
     event_support_cycle_selection = None
     event_support_cycle_validation_objective = None
+    teacher_rate_support = None
+    teacher_rate_target_rates = None
+    teacher_rate_blend = None
+    teacher_rate_freshness_weight = None
+    teacher_rate_power_weight = None
+    teacher_rate_validation_objective = None
     if bool(args.include_event_threshold_policy):
         (
             event_threshold_action_idx,
@@ -703,6 +715,40 @@ def main() -> None:
             f"aggregation={event_support_cycle_aggregation} threshold={event_support_cycle_value} "
             f"period={event_support_cycle_period} selection={event_support_cycle_selection} "
             f"validation_objective={event_support_cycle_validation_objective:.6f}"
+        )
+    if bool(args.include_teacher_rate_policy):
+        (
+            teacher_rate_support,
+            teacher_rate_target_rates,
+            teacher_rate_blend,
+            teacher_rate_freshness_weight,
+            teacher_rate_power_weight,
+            teacher_rate_validation_objective,
+        ) = calibrate_teacher_rate_policy(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            candidate_masks=candidate_masks,
+            labels=teacher_dataset.labels,
+            anchor_idx=selected_static_idx,
+            anchor_mask=selected_static_mask,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        rate_preview = (
+            [float(x) for x in np.asarray(teacher_rate_target_rates, dtype=float).round(3).tolist()]
+            if teacher_rate_target_rates is not None
+            else None
+        )
+        log(
+            "teacher-rate calibration: "
+            f"support={list(teacher_rate_support) if teacher_rate_support is not None else None} "
+            f"blend={teacher_rate_blend} freshness_weight={teacher_rate_freshness_weight} "
+            f"power_weight={teacher_rate_power_weight} target_rates={rate_preview} "
+            f"validation_objective={teacher_rate_validation_objective:.6f}"
         )
     cost_model = None
     cost_history = None
@@ -1012,6 +1058,18 @@ def main() -> None:
                 preserve_warming=bool(args.bc_preserve_warming),
             )
         )
+    if bool(args.include_teacher_rate_policy) and teacher_rate_target_rates is not None:
+        policies.append(
+            ForecastAwareTeacherRatePolicy(
+                candidate_masks=candidate_masks,
+                target_rates=np.asarray(teacher_rate_target_rates, dtype=float),
+                allowed_action_indices=teacher_rate_support,
+                freshness_weight=float(teacher_rate_freshness_weight or 0.0),
+                power_weight=float(teacher_rate_power_weight or 0.0),
+                preserve_warming=bool(args.bc_preserve_warming),
+                anchor_mask=selected_static_mask,
+            )
+        )
     if bool(args.include_cost_policy) and cost_model is not None:
         policies.append(
             ForecastAwareCostPolicy(
@@ -1166,6 +1224,8 @@ def main() -> None:
                 "forecast_aware_cost",
                 "forecast_aware_mask_bc",
                 "forecast_aware_event_threshold",
+                "forecast_aware_event_support_cycle",
+                "forecast_aware_teacher_rate",
                 "forecast_aware_residual_bc",
                 "forecast_aware_value_residual",
                 "forecast_aware_ensemble_value",
@@ -1290,6 +1350,21 @@ def main() -> None:
             "period_grid": [int(x) for x in args.event_support_cycle_period_grid],
             "selection_grid": [str(x) for x in args.event_support_cycle_selection_grid],
             "validation_objective": event_support_cycle_validation_objective,
+        },
+        "teacher_rate_policy": {
+            "included": bool(args.include_teacher_rate_policy),
+            "support_top_k": int(args.teacher_rate_support_top_k),
+            "action_indices": [int(x) for x in teacher_rate_support] if teacher_rate_support is not None else None,
+            "target_rates": [float(x) for x in np.asarray(teacher_rate_target_rates, dtype=float).reshape(-1)]
+            if teacher_rate_target_rates is not None
+            else None,
+            "blend": teacher_rate_blend,
+            "freshness_weight": teacher_rate_freshness_weight,
+            "power_weight": teacher_rate_power_weight,
+            "blend_grid": [float(x) for x in args.teacher_rate_blend_grid],
+            "freshness_grid": [float(x) for x in args.teacher_rate_freshness_grid],
+            "power_grid": [float(x) for x in args.teacher_rate_power_grid],
+            "validation_objective": teacher_rate_validation_objective,
         },
         "deployable_selection": {
             "mode": str(args.deployable_selection),
@@ -2171,6 +2246,96 @@ def calibrate_event_support_cycle_policy(
     )
 
 
+def calibrate_teacher_rate_policy(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    candidate_masks: np.ndarray,
+    labels: np.ndarray,
+    anchor_idx: int | None,
+    anchor_mask: tuple[bool, ...],
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[tuple[int, ...] | None, np.ndarray | None, float | None, float | None, float | None, float]:
+    labels_arr = np.asarray(labels, dtype=int).reshape(-1)
+    if labels_arr.size == 0:
+        return None, None, None, None, None, float("inf")
+    masks = np.asarray(candidate_masks, dtype=bool)
+    if np.any(labels_arr < 0) or np.any(labels_arr >= masks.shape[0]):
+        raise ValueError("teacher-rate calibration received labels outside candidate mask range")
+    teacher_rates = np.mean(masks[labels_arr].astype(float), axis=0)
+    anchor_rates = np.asarray(anchor_mask, dtype=float).reshape(-1)
+    support = action_support_from_labels(
+        labels_arr,
+        n_actions=int(masks.shape[0]),
+        top_k=max(1, int(args.teacher_rate_support_top_k)),
+        min_count=int(args.bc_action_support_min_count),
+        anchor_idx=anchor_idx,
+    )
+    if support is None:
+        support = tuple(int(idx) for idx in np.unique(labels_arr))
+    blends = [float(x) for x in args.teacher_rate_blend_grid] or [1.0]
+    freshness_weights = [float(x) for x in args.teacher_rate_freshness_grid] or [0.0]
+    power_weights = [float(x) for x in args.teacher_rate_power_grid] or [0.0]
+    rows: list[tuple[float, float, float, float, float, int, np.ndarray]] = []
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    combo_idx = 0
+    for blend in blends:
+        blend = float(np.clip(blend, 0.0, 1.0))
+        target_rates = np.clip((1.0 - blend) * anchor_rates + blend * teacher_rates, 0.0, 1.0)
+        for freshness_weight in freshness_weights:
+            for power_weight in power_weights:
+                policy = ForecastAwareTeacherRatePolicy(
+                    candidate_masks=masks,
+                    target_rates=target_rates,
+                    allowed_action_indices=support,
+                    freshness_weight=float(freshness_weight),
+                    power_weight=float(power_weight),
+                    preserve_warming=bool(args.bc_preserve_warming),
+                    anchor_mask=anchor_mask,
+                    name=f"forecast_aware_teacher_rate_calib_{combo_idx}",
+                )
+                metrics, objective = evaluate_validation_policy_metrics(
+                    args,
+                    truth=truth,
+                    sensors=sensors,
+                    constraints=constraints,
+                    cfg=cfg,
+                    oracle=oracle,
+                    policy=policy,
+                    state_columns=state_columns,
+                    sensor_ids=sensor_ids,
+                    starts=starts,
+                    seed_offset=190_000 + combo_idx * 101,
+                )
+                rows.append(
+                    (
+                        float(objective),
+                        float(metrics.get("power_mean", np.nan)),
+                        float(blend),
+                        float(freshness_weight),
+                        float(power_weight),
+                        combo_idx,
+                        target_rates.astype(float).copy(),
+                    )
+                )
+                combo_idx += 1
+    rows.sort(key=lambda item: (item[0], item[1], item[5]))
+    best_objective, _, best_blend, best_freshness, best_power, _, best_rates = rows[0]
+    return (
+        tuple(int(x) for x in support),
+        np.asarray(best_rates, dtype=float),
+        float(best_blend),
+        float(best_freshness),
+        float(best_power),
+        float(best_objective),
+    )
+
+
 def select_deployables_for_final(
     args: argparse.Namespace,
     *,
@@ -2191,6 +2356,7 @@ def select_deployables_for_final(
         "forecast_aware_mask_bc",
         "forecast_aware_event_threshold",
         "forecast_aware_event_support_cycle",
+        "forecast_aware_teacher_rate",
         "forecast_aware_residual_bc",
         "forecast_aware_value_residual",
         "forecast_aware_ensemble_value",
