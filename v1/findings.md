@@ -410,3 +410,15 @@
   replay the teacher-label sequence with feasibility lookahead, preserving the
   high switching structure that appears to generate the teacher's lower-power
   forecast benefit.
+- Teacher-sequence replay did not improve the B=1.35 boundary: it repeated the
+  teacher-rate pattern (`1/5`, mean margin `-0.007056`) and the sequence policy
+  lost the validation static-margin guard in every seed. Restoring BC/KNN to
+  the guarded hybrid candidate set also failed (`1/5`, mean margin
+  `-0.008513`), with only seed44 passing.
+- The actionable conclusion is no longer "try another small B=1.35
+  compression." Across six B=1.35 deployable attempts, teacher wins remain
+  `5/5` but deployable wins remain `1/5`. This is a real operating-regime
+  mismatch: looser budget makes the validation-selected static anchor strong
+  enough that deployable forecast-triggered deviations do not transfer
+  reliably. The paper path should state this as a boundary and strengthen the
+  supported `B=1.20` claim with more seeds and perturbation evidence.

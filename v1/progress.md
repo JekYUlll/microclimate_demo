@@ -945,3 +945,15 @@
   BC/KNN guarded experiment in tmux `v1_budget1p35_bc_guarded_20260601`, output
   root `v1/artifacts/claim_suite_budget1p35_bc_guarded`. Early logs show all
   seeds computing the train-split static candidate prior.
+- The B=1.35 BC/KNN guarded run completed and was synced locally. Aggregate:
+  deployable `1/5`, teacher `5/5`, mean deployable margin `-0.008513`,
+  median `-0.012102`, sign-test `p=0.375`. Per-seed selected deployables:
+  seed41 event-threshold `-0.013361`, seed42 BC `-0.008074`, seed43
+  event-threshold `-0.012521`, seed44 value-residual `+0.003493`, seed45
+  value-residual `-0.012102`.
+- Conclusion from the B=1.35 sequence of tests: the privileged teacher keeps
+  finding dynamic value, but deployable compression through event threshold,
+  event-support cycle, freshness selection, teacher-rate targets,
+  teacher-sequence replay, and restored BC/KNN all fails at `1/5`. I am
+  treating `B=1.35` as a boundary condition and moving the main evidence path
+  to seed scaling at the supported `B=1.20` operating point.

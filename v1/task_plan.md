@@ -178,6 +178,13 @@ will continue toward learned rollout-value / online planning.
   teacher-rate run also failed (`1/5`, mean margin `-0.007056`), so the next
   candidate preserves the teacher's high-switch temporal sequence rather than
   only matching average sensor active rates.
+- [ ] Boundary conclusion: `B=1.35` remains a negative deployable boundary.
+  Teacher-sequence and BC/KNN guarded hybrids both failed (`1/5` deployable
+  wins) while teacher stayed `5/5`; further low-rank teacher-compression tweaks
+  are not the current priority.
+- [ ] Active scaling pivot: expand the supported `B=1.20` operating point to
+  additional seeds using v1-generated inputs, then aggregate old and new runs
+  to determine whether the main forecast-triggered claim survives beyond n=5.
 - **Status:** in_progress
 
 ## Error Log
