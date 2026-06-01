@@ -302,3 +302,15 @@
   Reopening the full space reintroduces the earlier OOD action-cost failure
   mode. The corrected residual policies return an empty supported set in that
   case, causing an explicit fallback to the validation-static anchor.
+- Server `learned_advantage_residual_calib_safe` with the anchor projection and
+  strict-support fixes failed decisively: deployable `0/5`, mean margin
+  `-0.018997`, while the teacher stayed `5/5` with mean margin `+0.030599`.
+  This is no longer an implementation crash; it is a negative result for the
+  direct advantage-regression deployable route.
+- The failure pattern is informative. Advantage residual often improves the
+  task-event error but increases frozen-oracle / weighted forecast error enough
+  to lose the task-composite objective. Validation calibration overfits this
+  tradeoff and does not transfer to final windows. Therefore the next route
+  should not replace the stable value-residual policy with direct advantage
+  regression; it should treat advantage residual as an optional deployable
+  candidate selected against the value-residual baseline on validation.

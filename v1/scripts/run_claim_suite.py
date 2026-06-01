@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
             "learned_ensemble_value_safe",
             "learned_advantage_residual_safe",
             "learned_advantage_residual_calib_safe",
+            "learned_hybrid_residual_calib_safe",
             "cost_support6_safe",
             "no_dagger",
             "oracle_objective",
@@ -297,6 +298,7 @@ def base_command(
         "learned_ensemble_value_safe",
         "learned_advantage_residual_safe",
         "learned_advantage_residual_calib_safe",
+        "learned_hybrid_residual_calib_safe",
         "cost_support6_safe",
         "no_dagger",
         "no_anchor_guard",
@@ -350,6 +352,7 @@ def base_command(
         "learned_ensemble_value_safe",
         "learned_advantage_residual_safe",
         "learned_advantage_residual_calib_safe",
+        "learned_hybrid_residual_calib_safe",
         "cost_support6_safe",
     }:
         common.append("--bc-preserve-warming")
@@ -374,6 +377,7 @@ def base_command(
         "learned_ensemble_value_safe": 8,
         "learned_advantage_residual_safe": 6,
         "learned_advantage_residual_calib_safe": 6,
+        "learned_hybrid_residual_calib_safe": 6,
     }.get(preset, 0)
     common.extend(["--bc-action-support-top-k", str(support_top_k)])
     if preset == "support_calib_safe":
@@ -389,6 +393,7 @@ def base_command(
         "learned_ensemble_value_safe",
         "learned_advantage_residual_safe",
         "learned_advantage_residual_calib_safe",
+        "learned_hybrid_residual_calib_safe",
     }:
         common.append("--no-include-bc-policy")
     else:
@@ -404,7 +409,7 @@ def base_command(
             common.extend(["--mask-bc-anchor-bias", "0.25"])
     else:
         common.append("--no-include-mask-bc-policy")
-    if preset == "hybrid_val_safe":
+    if preset in {"hybrid_val_safe", "learned_hybrid_residual_calib_safe"}:
         common.extend(["--deployable-selection", "validation"])
     if preset == "residual_safe":
         common.extend(
@@ -433,6 +438,7 @@ def base_command(
         "value_residual_no_dagger",
         "value_residual_oracle_objective",
         "learned_value_residual_safe",
+        "learned_hybrid_residual_calib_safe",
     }:
         common.extend(
             [
@@ -477,7 +483,11 @@ def base_command(
         )
     else:
         common.append("--no-include-ensemble-value-policy")
-    if preset in {"learned_advantage_residual_safe", "learned_advantage_residual_calib_safe"}:
+    if preset in {
+        "learned_advantage_residual_safe",
+        "learned_advantage_residual_calib_safe",
+        "learned_hybrid_residual_calib_safe",
+    }:
         common.extend(
             [
                 "--include-advantage-residual-policy",
@@ -496,7 +506,7 @@ def base_command(
                 "1.0",
             ]
         )
-        if preset == "learned_advantage_residual_calib_safe":
+        if preset in {"learned_advantage_residual_calib_safe", "learned_hybrid_residual_calib_safe"}:
             common.extend(["--advantage-residual-support-grid", "3", "5", "6", "8", "12"])
     else:
         common.append("--no-include-advantage-residual-policy")
@@ -505,6 +515,7 @@ def base_command(
         "learned_ensemble_value_safe",
         "learned_advantage_residual_safe",
         "learned_advantage_residual_calib_safe",
+        "learned_hybrid_residual_calib_safe",
     }:
         common.extend(
             [

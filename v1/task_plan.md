@@ -134,7 +134,14 @@ will continue toward learned rollout-value / online planning.
   falls back to the static anchor rather than reopening the full OOD action
   space.
 - [ ] Run corrected calibrated n=5 candidate:
-  `v1_claim_learned_advantage_calib_anchorfix_strict_n5_20260601`.
+  `v1_claim_learned_advantage_calib_anchorfix_strict_n5_20260601`. Result:
+  teacher `5/5`, deployable `0/5`, mean deployable margin `-0.018997`.
+  This route is rejected as the main deployable algorithm.
+- [ ] Active correction: evaluate a validation-selected hybrid residual suite
+  that includes the stable learned value-residual policy and the rejected
+  advantage residual policy, selecting deployables on validation rather than
+  committing to advantage residual alone.
+- [x] Add `learned_hybrid_residual_calib_safe` preset for that hybrid route.
 - [ ] Scale the final strong candidate beyond the old n=5 single-setting gate:
   more seeds, at least two budgets, and at least one event-regime perturbation.
 - **Status:** in_progress

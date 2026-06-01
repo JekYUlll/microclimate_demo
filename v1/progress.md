@@ -672,3 +672,21 @@
   tmux `v1_claim_learned_advantage_calib_anchorfix_strict_n5_20260601`,
   output root
   `v1/artifacts/claim_suite_semimarkov_n5_learned_advantage_calib_anchorfix_strict`.
+- 2026-06-01 08:27 CST: `anchorfix_strict` completed and was aggregated.
+  Result: `claim_pass=false`, deployable `0/5`, mean deployable margin
+  `-0.018997`, median `-0.014324`; teacher remained `5/5` with mean margin
+  `+0.030599`. Per-seed deployable margins were seed41 `-0.036881`, seed42
+  `-0.013122`, seed43 `-0.022669`, seed44 `-0.014324`, seed45 `-0.007991`.
+- Interpretation: the anchor projection/strict support fixes were necessary
+  and removed non-result crashes, but direct anchor-advantage regression is a
+  bad deployable replacement. It systematically deviates from the static anchor
+  in ways that improve some event-task terms but worsen the frozen-oracle
+  forecast objective on final windows.
+- Implemented the next correction in `run_claim_suite.py`:
+  `learned_hybrid_residual_calib_safe`. It trains both learned
+  value-residual and learned advantage-residual deployables, calibrates each on
+  validation, and then uses validation deployable selection to choose between
+  them for final replay. Dry-run verified the command includes both
+  `--include-value-residual-policy` and `--include-advantage-residual-policy`
+  plus `--deployable-selection validation`. Local core tests remain `17
+  passed`.
