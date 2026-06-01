@@ -443,3 +443,8 @@
   distribution. The next correction should test a different compression of the
   teacher behavior, such as active-rate/freshness targets, before investing in
   heavier learned online planning.
+- The completed BC/KNN extension ends at `7/10`, so it is an improvement but
+  not a standalone extension pass. However, because the original event/value
+  n=5 result lost only seed44, the BC/KNN method still has one narrow path to a
+  combined `12/15`: it must run `5/5` on the original seeds. That check is
+  necessary before rejecting BC/KNN as the combined B=1.20 main method.

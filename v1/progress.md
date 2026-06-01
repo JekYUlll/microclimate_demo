@@ -1019,3 +1019,12 @@
   `v1_claim_b1p20_ext_rate_46_55_20260601`, single-GPU/serial on GPU `1`.
   This tests teacher active-rate/freshness compression rather than adding more
   action classifiers.
+- The BC/KNN guarded extension completed: deployable `7/10`, teacher `9/10`,
+  mean deployable margin `+0.001247`, sign-test `p=0.34375`; fail reason is
+  deployable wins `< 8`. It improves over event/value (`6/10`) but still does
+  not pass the extension gate.
+- Launched BC/KNN guarded on the original B=1.20 seeds `41--45`, root
+  `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_bc_guarded_paired`, tmux
+  `v1_claim_b1p20_n5_bc_20260601`, two-way parallel on GPUs `4/5`. This tests
+  whether the same BC/KNN method can reach combined `12/15` if it fixes the
+  old seed44 failure.

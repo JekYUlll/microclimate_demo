@@ -196,6 +196,9 @@ will continue toward learned rollout-value / online planning.
   becoming mathematically unable to hit `8/10`, run the teacher-rate guarded
   extension as a distinct compression mechanism rather than another action
   classifier.
+- [ ] Additional check: run BC/KNN guarded on the original seeds `41--45`.
+  The extension result is `7/10`; if old seeds are `5/5`, the same BC/KNN
+  method can still reach the combined `12/15` threshold.
 - **Status:** in_progress
 
 ## Error Log
