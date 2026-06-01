@@ -392,3 +392,8 @@
   low-cost correction that keeps the deployed policy causal and validation
   calibrated while using online sensor age to choose among teacher-supported
   event actions.
+- The completed time-cycle run validates that concern. It failed at `1/5`
+  deployable wins with negative mean margin, while the teacher remained `5/5`.
+  The event-support set itself is not enough; the deployed policy needs a
+  state-dependent choice within that support. Online freshness is the next
+  lowest-cost causal state signal to test before introducing a larger planner.

@@ -859,3 +859,19 @@
   v1/tests/test_forecast_cmdp_core.py` passed, and
   `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
   reported `22 passed`.
+- Remote verification after sync also passed: `python -m py_compile ...` and
+  `python -m pytest -q v1/tests/test_forecast_cmdp_core.py` reported
+  `22 passed`.
+- Committed the freshness-grid implementation as
+  `7aeede3 Add freshness event support selection`.
+- Completed and aggregated the initial `B=1.35` event-support-cycle time
+  variant at
+  `v1/artifacts/claim_suite_budget1p35_event_cycle_guarded`. It failed:
+  deployable `1/5`, teacher `5/5`, mean deployable margin `-0.008706`,
+  median `-0.008152`; only seed44 passed. This confirms the remaining
+  B=1.35 problem is deployable temporal selection, not teacher value.
+- Launched the follow-up freshness-grid experiment in tmux
+  `v1_budget1p35_event_cycle_freshness_20260601`, output root
+  `v1/artifacts/claim_suite_budget1p35_event_cycle_freshness_guarded`.
+  Early logs show all five seeds training the split-compliant learned event
+  forecaster.

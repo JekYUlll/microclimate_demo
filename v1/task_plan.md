@@ -166,8 +166,9 @@ will continue toward learned rollout-value / online planning.
 - [ ] Active correction for the `B=1.35` failure: test an
   event-support-cycle deployable that rotates over teacher-supported event
   actions instead of switching to one fixed event mask. The initial
-  time-cycle variant is running; if it fails, the next tested variant uses a
-  freshness-based selector over the same teacher-supported action set.
+  time-cycle variant failed (`1/5`, mean margin `-0.008706`) while teacher
+  stayed `5/5`; the active follow-up is the freshness-selection grid over the
+  same teacher-supported action set.
 - **Status:** in_progress
 
 ## Error Log
