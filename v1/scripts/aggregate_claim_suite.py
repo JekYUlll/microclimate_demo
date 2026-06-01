@@ -13,7 +13,7 @@ import pandas as pd
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Aggregate v1 multi-seed claim-suite outputs.")
-    parser.add_argument("suite_root")
+    parser.add_argument("suite_roots", nargs="+")
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--main-preset", default="main")
     parser.add_argument("--min-seeds", type=int, default=5)
@@ -23,13 +23,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    suite_root = Path(args.suite_root)
-    out_dir = Path(args.out_dir) if args.out_dir else suite_root / "aggregate"
+    suite_roots = [Path(value) for value in args.suite_roots]
+    if args.out_dir:
+        out_dir = Path(args.out_dir)
+    elif len(suite_roots) == 1:
+        out_dir = suite_roots[0] / "aggregate"
+    else:
+        raise SystemExit("--out-dir is required when aggregating multiple suite roots")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    run_rows, policy_rows = collect_runs(suite_root)
+    run_rows, policy_rows = collect_suite_roots(suite_roots)
     if not run_rows:
-        raise FileNotFoundError(f"No completed gate_summary.json files under {suite_root}")
+        raise FileNotFoundError(f"No completed gate_summary.json files under {suite_roots}")
     runs = pd.DataFrame(run_rows).sort_values(["preset", "seed", "run_dir"])
     policies = pd.DataFrame(policy_rows).sort_values(["preset", "seed", "policy"]) if policy_rows else pd.DataFrame()
     runs.to_csv(out_dir / "claim_runs.csv", index=False)
@@ -51,6 +56,16 @@ def main() -> None:
     )
     (out_dir / "claim_assessment.md").write_text(render_markdown(summary, assessment), encoding="utf-8")
     print(json.dumps(assessment, indent=2, ensure_ascii=False))
+
+
+def collect_suite_roots(suite_roots: list[Path]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    run_rows: list[dict[str, object]] = []
+    policy_rows: list[dict[str, object]] = []
+    for suite_root in suite_roots:
+        root_runs, root_policies = collect_runs(suite_root)
+        run_rows.extend(root_runs)
+        policy_rows.extend(root_policies)
+    return run_rows, policy_rows
 
 
 def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[str, object]]]:

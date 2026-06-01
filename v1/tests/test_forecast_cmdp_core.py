@@ -897,6 +897,35 @@ def test_claim_assessment_enforces_win_rate_against_actual_n():
     assert not assessment["claim_pass"]
 
 
+def test_claim_aggregate_collects_multiple_roots(tmp_path):
+    module_path = ROOT / "v1" / "scripts" / "aggregate_claim_suite.py"
+    spec = importlib.util.spec_from_file_location("aggregate_claim_suite_test", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for idx, root in enumerate((tmp_path / "suite_a", tmp_path / "suite_b"), start=1):
+        run_dir = root / f"main_seed{idx}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "gate_summary.json").write_text(
+            """
+{
+  "validation_selected_static_objective": 1.0,
+  "teacher_reference_objective": 0.8,
+  "best_deployable_objective": 0.9,
+  "teacher_beats_static": true,
+  "gate_pass": true,
+  "objective_metric": "task_composite",
+  "best_deployable_policy": "forecast_aware_event_threshold"
+}
+""".strip(),
+            encoding="utf-8",
+        )
+        (run_dir / "manifest.json").write_text('{"seed": %d}' % idx, encoding="utf-8")
+    run_rows, policy_rows = module.collect_suite_roots([tmp_path / "suite_a", tmp_path / "suite_b"])
+    assert len(run_rows) == 2
+    assert not policy_rows
+
+
 def test_budget_matrix_assessment_enforces_win_rate_against_actual_n():
     module_path = ROOT / "v1" / "scripts" / "aggregate_budget_matrix.py"
     spec = importlib.util.spec_from_file_location("aggregate_budget_matrix_test", module_path)
