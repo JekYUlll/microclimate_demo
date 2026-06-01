@@ -957,3 +957,10 @@
   teacher-sequence replay, and restored BC/KNN all fails at `1/5`. I am
   treating `B=1.35` as a boundary condition and moving the main evidence path
   to seed scaling at the supported `B=1.20` operating point.
+- Launched B=1.20 extension input preparation on the GPU server using the new
+  v1 input-prep path, output root
+  `v1/artifacts/claim_inputs_semimarkov_ext_b1p20`, seeds `46--55`.
+  The jobs are split across tmux sessions `v1_prepare_b1p20_46_49`
+  (`cuda:1`), `v1_prepare_b1p20_50_52` (`cuda:4`), and
+  `v1_prepare_b1p20_53_55` (`cuda:5`). This prepares truth CSVs, split
+  manifests, and frozen TCN oracles without archived PPO training.
