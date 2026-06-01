@@ -71,6 +71,7 @@ def parse_args() -> argparse.Namespace:
             "learned_hybrid_rate_guarded_safe",
             "learned_hybrid_sequence_guarded_safe",
             "learned_hybrid_bc_guarded_safe",
+            "learned_hybrid_planner_guarded_safe",
             "cost_support6_safe",
             "no_dagger",
             "oracle_objective",
@@ -311,6 +312,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
         "cost_support6_safe",
         "no_dagger",
         "no_anchor_guard",
@@ -371,6 +373,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
         "cost_support6_safe",
     }:
         common.append("--bc-preserve-warming")
@@ -402,6 +405,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe": 6,
         "learned_hybrid_sequence_guarded_safe": 6,
         "learned_hybrid_bc_guarded_safe": 6,
+        "learned_hybrid_planner_guarded_safe": 8,
     }.get(preset, 0)
     common.extend(["--bc-action-support-top-k", str(support_top_k)])
     if preset == "support_calib_safe":
@@ -423,6 +427,7 @@ def base_command(
         "learned_hybrid_event_cycle_guarded_safe",
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
     }:
         common.append("--no-include-bc-policy")
     else:
@@ -447,6 +452,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
     }:
         common.extend(["--deployable-selection", "validation"])
         if preset in {
@@ -456,6 +462,7 @@ def base_command(
             "learned_hybrid_rate_guarded_safe",
             "learned_hybrid_sequence_guarded_safe",
             "learned_hybrid_bc_guarded_safe",
+            "learned_hybrid_planner_guarded_safe",
         }:
             common.extend(
                 [
@@ -503,6 +510,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
     }:
         common.extend(
             [
@@ -523,6 +531,34 @@ def base_command(
         )
     else:
         common.append("--no-include-value-residual-policy")
+    if preset == "learned_hybrid_planner_guarded_safe":
+        common.extend(
+            [
+                "--include-rollout-value-policy",
+                "--rollout-value-support-top-k",
+                "8",
+                "--rollout-value-depth",
+                "2",
+                "--rollout-value-beam-width",
+                "4",
+                "--rollout-value-max-branch",
+                "6",
+                "--rollout-value-discount",
+                "0.95",
+                "--rollout-value-advantage-grid",
+                "-1.0",
+                "-0.5",
+                "-0.2",
+                "-0.1",
+                "0.0",
+                "0.1",
+                "0.2",
+                "0.5",
+                "1.0",
+            ]
+        )
+    else:
+        common.append("--no-include-rollout-value-policy")
     if preset == "learned_ensemble_value_safe":
         common.extend(
             [
@@ -597,6 +633,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
     }:
         common.extend(
             [
@@ -619,6 +656,7 @@ def base_command(
         "learned_hybrid_rate_guarded_safe",
         "learned_hybrid_sequence_guarded_safe",
         "learned_hybrid_bc_guarded_safe",
+        "learned_hybrid_planner_guarded_safe",
     }:
         common.extend(
             [

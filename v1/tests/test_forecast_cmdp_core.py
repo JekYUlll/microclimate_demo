@@ -23,11 +23,14 @@ from forecast_cmdp.cost_policy import (
     ForecastAwareAdvantageResidualPolicy,
     ForecastAwareCostPolicy,
     ForecastAwareEnsembleValuePolicy,
+    ForecastAwareRolloutValuePolicy,
     collect_anchor_advantage_dataset,
     collect_action_cost_dataset,
+    collect_feature_transition_dataset,
     train_anchor_advantage_model,
     train_action_cost_ensemble,
     train_action_cost_model,
+    train_feature_transition_model,
 )
 from forecast_cmdp.dataset import collect_dagger_dataset, collect_teacher_dataset, concat_teacher_datasets
 from forecast_cmdp.mpc_teacher import (
@@ -728,6 +731,61 @@ def test_ensemble_value_policy_smoke():
     action = policy.act_mask(env)
     assert action.shape == (3,)
     assert env.projector.project_mask(action, env.runtimes).feasible
+
+
+def test_rollout_value_policy_smoke():
+    env = make_env()
+    masks = enumerate_action_masks(3, max_active=2)
+    teacher_cfg = MpcTeacherConfig(planning_horizon=1, beam_width=2, max_branch=4)
+    forecast_cfg = ForecastContextConfig(horizon=3, truth_future=False)
+    cost_dataset = collect_action_cost_dataset(
+        env,
+        masks,
+        start_indices=(18,),
+        steps_per_start=3,
+        teacher_cfg=teacher_cfg,
+        forecast_cfg=forecast_cfg,
+    )
+    cost_model, _ = train_action_cost_model(
+        cost_dataset,
+        ActionCostTrainingConfig(epochs=2, batch_size=8, hidden_dim=16, device="cpu"),
+    )
+    anchor_idx = int(np.flatnonzero(np.all(masks == np.asarray([[1, 0, 0]], dtype=bool), axis=1))[0])
+    anchor = tuple(bool(x) for x in masks[anchor_idx])
+    transition_dataset = collect_feature_transition_dataset(
+        env,
+        masks,
+        start_indices=(18,),
+        steps_per_start=3,
+        teacher_cfg=teacher_cfg,
+        forecast_cfg=forecast_cfg,
+        allowed_action_indices=(anchor_idx,),
+        anchor_mask=anchor,
+    )
+    assert transition_dataset.inputs.shape[0] > 0
+    assert transition_dataset.deltas.shape[1] == transition_dataset.feature_dim
+    transition_model, history = train_feature_transition_model(
+        transition_dataset,
+        ActionCostTrainingConfig(epochs=2, batch_size=8, hidden_dim=16, device="cpu"),
+    )
+    assert len(history["loss"]) == 2
+    policy = ForecastAwareRolloutValuePolicy(
+        cost_model=cost_model,
+        transition_model=transition_model,
+        candidate_masks=masks,
+        forecast_cfg=forecast_cfg,
+        anchor_mask=anchor,
+        device="cpu",
+        allowed_action_indices=(anchor_idx,),
+        advantage_threshold=-1.0,
+        planning_depth=2,
+        beam_width=2,
+        max_branch=2,
+    )
+    env.reset(start_idx=18)
+    action = policy.act_mask(env)
+    assert action.shape == (3,)
+    assert action.tolist() == [True, False, False]
 
 
 def test_anchor_advantage_residual_policy_smoke():

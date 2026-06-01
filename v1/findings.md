@@ -452,3 +452,17 @@
   that narrow path. This strengthens the conclusion that the current
   deployable layer is the bottleneck; adding more guarded action classifiers
   does not reliably transfer teacher value to final-test rollouts.
+- The active algorithmic correction is now a learned rollout-value planner,
+  not another teacher-label compression. It adds a train-split
+  action-conditioned transition surrogate and uses learned beam planning over
+  causal policy features. This directly targets the missing temporal component
+  identified by the n=15 failure: event thresholds and action classifiers can
+  decide whether to deviate from the static anchor, but they do not model how a
+  deviation changes subsequent warmup, freshness, observation history, and
+  forecast context.
+- The planner remains a deployable student rather than a privileged teacher:
+  transition labels are learned from train-split simulator rollouts, but final
+  decisions use only the fitted transition model, fitted action-cost model,
+  current env state, and learned event probability columns. This is a stronger
+  paper-level algorithmic story than BC/KNN/rate/cycle because it introduces a
+  causal model-predictive mechanism that can be ablated.

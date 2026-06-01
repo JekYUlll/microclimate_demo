@@ -199,6 +199,18 @@ will continue toward learned rollout-value / online planning.
 - [ ] Additional check: run BC/KNN guarded on the original seeds `41--45`.
   The extension result is `7/10`; if old seeds are `5/5`, the same BC/KNN
   method can still reach the combined `12/15` threshold.
+- [x] Close the BC/KNN narrow path. Old-seed BC/KNN failed seeds `41` and `42`,
+  so it cannot reach the combined `12/15` threshold.
+- [x] Implement the next algorithmic tier: learned rollout-value planning.
+  This trains a train-split feature-transition surrogate and deploys a
+  short-depth learned planner over the action-cost model, instead of treating
+  scheduling as one-step action classification.
+- [ ] Run server n=5 planner candidate:
+  `v1_claim_b1p20_n5_planner_20260601`, root
+  `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_guarded`.
+  If it improves the original seed set, scale to seeds `46--55`; if it fails,
+  inspect whether transition error, validation selection, or insufficient
+  candidate support is the cause before adding another policy head.
 - **Status:** in_progress
 
 ## Error Log

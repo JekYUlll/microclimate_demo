@@ -32,12 +32,15 @@ from forecast_cmdp.cost_policy import (
     ForecastAwareAdvantageResidualPolicy,
     ForecastAwareCostPolicy,
     ForecastAwareEnsembleValuePolicy,
+    ForecastAwareRolloutValuePolicy,
     ForecastAwareValueResidualPolicy,
     collect_anchor_advantage_dataset,
     collect_action_cost_dataset,
+    collect_feature_transition_dataset,
     train_anchor_advantage_model,
     train_action_cost_ensemble,
     train_action_cost_model,
+    train_feature_transition_model,
 )
 from forecast_cmdp.dataset import collect_dagger_dataset, collect_teacher_dataset, concat_teacher_datasets
 from forecast_cmdp.event_forecaster import (
@@ -223,6 +226,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-value-residual-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--include-ensemble-value-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--include-advantage-residual-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--include-rollout-value-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--value-residual-support-top-k", type=int, default=5)
     parser.add_argument(
         "--value-residual-advantage-grid",
@@ -242,6 +246,17 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         type=float,
         default=[-0.2, -0.1, 0.0, 0.05, 0.1, 0.2, 0.35, 0.5, 0.8, 1.0],
+    )
+    parser.add_argument("--rollout-value-support-top-k", type=int, default=8)
+    parser.add_argument("--rollout-value-depth", type=int, default=2)
+    parser.add_argument("--rollout-value-beam-width", type=int, default=4)
+    parser.add_argument("--rollout-value-max-branch", type=int, default=6)
+    parser.add_argument("--rollout-value-discount", type=float, default=0.95)
+    parser.add_argument(
+        "--rollout-value-advantage-grid",
+        nargs="*",
+        type=float,
+        default=[-1.0, -0.5, -0.2, -0.1, 0.0, 0.1, 0.2, 0.5, 1.0],
     )
     parser.add_argument("--cost-epochs", type=int, default=50)
     parser.add_argument("--cost-hidden-dim", type=int, default=256)
@@ -769,7 +784,17 @@ def main() -> None:
     advantage_residual_support = None
     advantage_residual_threshold = None
     advantage_residual_validation_objective = None
-    if bool(args.include_cost_policy) or bool(args.include_value_residual_policy) or bool(args.include_ensemble_value_policy):
+    rollout_value_transition_model = None
+    rollout_value_transition_history = None
+    rollout_value_support = None
+    rollout_value_threshold = None
+    rollout_value_validation_objective = None
+    if (
+        bool(args.include_cost_policy)
+        or bool(args.include_value_residual_policy)
+        or bool(args.include_ensemble_value_policy)
+        or bool(args.include_rollout_value_policy)
+    ):
         log("collecting action-cost dataset")
         cost_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
         cost_dataset = collect_action_cost_dataset(
@@ -893,6 +918,64 @@ def main() -> None:
             f"threshold={value_residual_threshold} "
             f"validation_objective={value_residual_validation_objective:.6f} "
             f"support={list(value_residual_support) if value_residual_support is not None else None}"
+        )
+    if bool(args.include_rollout_value_policy) and cost_model is not None:
+        rollout_value_support = action_support_from_labels(
+            teacher_dataset.labels,
+            n_actions=int(candidate_masks.shape[0]),
+            top_k=int(args.rollout_value_support_top_k),
+            min_count=int(args.bc_action_support_min_count),
+            anchor_idx=selected_static_idx,
+        )
+        log("collecting feature-transition dataset")
+        transition_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
+        transition_dataset = collect_feature_transition_dataset(
+            transition_env,
+            candidate_masks,
+            start_indices=starts["train"].starts,
+            steps_per_start=int(args.train_steps),
+            teacher_cfg=teacher_cfg,
+            forecast_cfg=forecast_cfg,
+            allowed_action_indices=rollout_value_support,
+            anchor_mask=selected_static_mask,
+        )
+        log(f"feature-transition dataset collected: rows={transition_dataset.inputs.shape[0]}")
+        transition_train_cfg = ActionCostTrainingConfig(
+            hidden_dim=int(args.cost_hidden_dim),
+            epochs=int(args.cost_epochs),
+            batch_size=512,
+            seed=int(args.seed) + 29,
+            device=str(args.bc_device),
+        )
+        rollout_value_transition_model, rollout_value_transition_history = train_feature_transition_model(
+            transition_dataset,
+            transition_train_cfg,
+        )
+        log(
+            "feature-transition model training complete: "
+            f"final_loss={rollout_value_transition_history['loss'][-1] if rollout_value_transition_history and rollout_value_transition_history.get('loss') else float('nan')}"
+        )
+        rollout_value_threshold, rollout_value_validation_objective = calibrate_rollout_value_policy(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            cost_model=cost_model,
+            transition_model=rollout_value_transition_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=selected_static_mask,
+            allowed_action_indices=rollout_value_support,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        log(
+            "rollout-value calibration: "
+            f"threshold={rollout_value_threshold} "
+            f"validation_objective={rollout_value_validation_objective:.6f} "
+            f"support={list(rollout_value_support) if rollout_value_support is not None else None}"
         )
     if bool(args.include_ensemble_value_policy) and cost_ensemble_models is not None:
         ensemble_value_support = action_support_from_labels(
@@ -1107,6 +1190,28 @@ def main() -> None:
                 preserve_warming=bool(args.bc_preserve_warming),
             )
         )
+    if (
+        bool(args.include_rollout_value_policy)
+        and cost_model is not None
+        and rollout_value_transition_model is not None
+    ):
+        policies.append(
+            ForecastAwareRolloutValuePolicy(
+                cost_model=cost_model,
+                transition_model=rollout_value_transition_model,
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=selected_static_mask,
+                device=str(args.bc_device),
+                allowed_action_indices=rollout_value_support,
+                advantage_threshold=float(rollout_value_threshold if rollout_value_threshold is not None else 0.0),
+                planning_depth=int(args.rollout_value_depth),
+                beam_width=int(args.rollout_value_beam_width),
+                max_branch=int(args.rollout_value_max_branch),
+                discount=float(args.rollout_value_discount),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
     if bool(args.include_ensemble_value_policy) and cost_ensemble_models is not None:
         policies.append(
             ForecastAwareEnsembleValuePolicy(
@@ -1242,6 +1347,7 @@ def main() -> None:
                 "forecast_aware_teacher_cycle",
                 "forecast_aware_residual_bc",
                 "forecast_aware_value_residual",
+                "forecast_aware_rollout_value",
                 "forecast_aware_ensemble_value",
                 "forecast_aware_advantage_residual",
             ]
@@ -1412,6 +1518,21 @@ def main() -> None:
             "advantage_threshold": value_residual_threshold,
             "advantage_grid": [float(x) for x in args.value_residual_advantage_grid],
             "validation_objective": value_residual_validation_objective,
+        },
+        "rollout_value_policy": {
+            "included": bool(args.include_rollout_value_policy),
+            "support_top_k": int(args.rollout_value_support_top_k),
+            "support_indices": [int(x) for x in rollout_value_support]
+            if rollout_value_support is not None
+            else None,
+            "planning_depth": int(args.rollout_value_depth),
+            "beam_width": int(args.rollout_value_beam_width),
+            "max_branch": int(args.rollout_value_max_branch),
+            "discount": float(args.rollout_value_discount),
+            "advantage_threshold": rollout_value_threshold,
+            "advantage_grid": [float(x) for x in args.rollout_value_advantage_grid],
+            "validation_objective": rollout_value_validation_objective,
+            "transition_history": rollout_value_transition_history,
         },
         "ensemble_value_policy": {
             "included": bool(args.include_ensemble_value_policy),
@@ -1826,6 +1947,81 @@ def calibrate_value_residual_threshold(
             steps=int(args.static_selection_steps),
             start_indices=starts,
             seed_offset=130_000 + idx * 101,
+        )
+        metrics = rich_metrics(
+            result,
+            sensor_ids=sensor_ids,
+            state_columns=state_columns,
+            per_step_budget=float(args.budget),
+            startup_peak_budget=float(args.startup_peak_budget),
+        )
+        metrics.update(
+            task_focus_metrics(
+                result,
+                state_columns=state_columns,
+                task_error_columns=tuple(str(x) for x in args.task_error_columns),
+                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+                event_only=bool(args.task_error_event_only),
+            )
+        )
+        objective = final_objective(
+            metrics,
+            mode=str(args.objective_mode),
+            task_error_weight=float(args.task_error_weight),
+        )
+        rows.append((float(objective), float(metrics.get("power_mean", np.nan)), float(threshold), idx))
+    rows.sort(key=lambda item: (item[0], item[1], item[3]))
+    best_objective, _, best_threshold, _ = rows[0]
+    return float(best_threshold), float(best_objective)
+
+
+def calibrate_rollout_value_policy(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    cost_model: object,
+    transition_model: object,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    anchor_mask: tuple[bool, ...],
+    allowed_action_indices: tuple[int, ...] | None,
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[float, float]:
+    rows: list[tuple[float, float, float, int]] = []
+    grid = [float(x) for x in args.rollout_value_advantage_grid] or [0.0]
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    for idx, threshold in enumerate(grid):
+        policy = ForecastAwareRolloutValuePolicy(
+            cost_model=cost_model,
+            transition_model=transition_model,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            anchor_mask=anchor_mask,
+            device=str(args.bc_device),
+            allowed_action_indices=allowed_action_indices,
+            advantage_threshold=float(threshold),
+            planning_depth=int(args.rollout_value_depth),
+            beam_width=int(args.rollout_value_beam_width),
+            max_branch=int(args.rollout_value_max_branch),
+            discount=float(args.rollout_value_discount),
+            preserve_warming=bool(args.bc_preserve_warming),
+            name=f"forecast_aware_rollout_value_calib_{idx}",
+        )
+        result, _ = evaluate_policy_over_starts(
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=cfg,
+            oracle=oracle,
+            policy=policy,
+            steps=int(args.static_selection_steps),
+            start_indices=starts,
+            seed_offset=145_000 + idx * 101,
         )
         metrics = rich_metrics(
             result,
@@ -2378,6 +2574,7 @@ def select_deployables_for_final(
         "forecast_aware_teacher_cycle",
         "forecast_aware_residual_bc",
         "forecast_aware_value_residual",
+        "forecast_aware_rollout_value",
         "forecast_aware_ensemble_value",
         "forecast_aware_advantage_residual",
     }

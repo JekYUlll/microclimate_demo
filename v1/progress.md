@@ -1031,3 +1031,35 @@
 - Early old-seed BC/KNN results close that narrow path: seeds 41 and 42 both
   fail (`-0.003910`, `-0.007997`). Since the extension result is `7/10`, the
   combined BC/KNN route can no longer reach `12/15`.
+- Implemented a new deployable planner route instead of adding another shallow
+  action classifier. The new `ForecastAwareRolloutValuePolicy` trains a
+  split-compliant feature-transition surrogate on the train split, then uses
+  the learned action-cost model plus learned transition model for short-depth
+  beam planning over teacher-supported feasible masks. It remains deployable:
+  final policy execution uses causal state and learned event-forecast columns,
+  not future truth rollouts.
+- Added `collect_feature_transition_dataset`, `train_feature_transition_model`,
+  `FeatureTransitionDataset`, and the `learned_hybrid_planner_guarded_safe`
+  claim-suite preset. This preset keeps the stable value-residual and
+  event-threshold candidates, adds rollout-value planning, and uses the same
+  validation static-margin guard for final deployable selection.
+- Verification:
+  local `python -m py_compile v1/forecast_cmdp/*.py v1/scripts/*.py
+  v1/tests/test_forecast_cmdp_core.py` passed; local
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reported `27 passed`. A tiny seed41 protocol smoke ran end to end and
+  selected `forecast_aware_rollout_value` on validation, proving the new policy
+  is wired into the runner.
+- Synced the planner implementation to the GPU server; remote `py_compile` and
+  pytest also reported `27 passed`.
+- Stopped the stale low-value tmux runs
+  `v1_claim_b1p20_ext_rate_46_55_20260601` and
+  `v1_claim_b1p20_n5_bc_20260601` after preserving their completed outputs.
+  The BC/KNN path was already mathematically unable to reach the combined
+  `12/15` target, and teacher-rate had not yet shown that the rate policy was
+  being selected.
+- Launched planner n=5 on the supported B=1.20 original seeds:
+  tmux `v1_claim_b1p20_n5_planner_20260601`, output root
+  `v1/artifacts/claim_suite_b1p20_n5_learned_hybrid_planner_guarded`, preset
+  `learned_hybrid_planner_guarded_safe`, seeds `41--45`, GPUs `1/4/5`.
+  Early logs show seeds `41--43` training the learned event forecaster.

@@ -53,6 +53,14 @@ class AnchorAdvantageDataset:
     anchor_idx: int
 
 
+@dataclass
+class FeatureTransitionDataset:
+    inputs: np.ndarray
+    deltas: np.ndarray
+    feature_dim: int
+    n_sensors: int
+
+
 def collect_action_cost_dataset(
     env: WarmupSchedulingEnv,
     candidate_masks: np.ndarray,
@@ -173,6 +181,63 @@ def collect_anchor_advantage_dataset(
     )
 
 
+def collect_feature_transition_dataset(
+    env: WarmupSchedulingEnv,
+    candidate_masks: np.ndarray,
+    *,
+    start_indices: tuple[int, ...],
+    steps_per_start: int,
+    teacher_cfg: MpcTeacherConfig,
+    forecast_cfg: ForecastContextConfig,
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None,
+    anchor_mask: tuple[bool, ...] | np.ndarray | None = None,
+) -> FeatureTransitionDataset:
+    """Collect causal one-step feature transitions for a learned planner.
+
+    Training may use the simulator/truth split to observe next features under
+    candidate actions. Deployed policies only use the fitted transition model.
+    """
+
+    masks = np.asarray(candidate_masks, dtype=bool)
+    allowed = _allowed_action_mask(allowed_action_indices, masks.shape[0])
+    if anchor_mask is not None:
+        anchor_idx = _candidate_index(masks, np.asarray(anchor_mask, dtype=bool).reshape(-1))
+        if anchor_idx is not None:
+            allowed[int(anchor_idx)] = True
+    rows: list[np.ndarray] = []
+    deltas: list[np.ndarray] = []
+    feature_dim: int | None = None
+    for start_idx in start_indices:
+        env.reset(start_idx=int(start_idx))
+        for _ in range(int(steps_per_start)):
+            feature = _current_policy_feature(env, forecast_cfg)
+            feature_dim = int(feature.shape[0])
+            valid = feasible_candidate_mask(env, masks) & allowed
+            valid_ids = np.flatnonzero(valid)
+            if valid_ids.size:
+                state_snapshot = snapshot_env(env)
+                for action_idx in valid_ids:
+                    restore_env(env, state_snapshot)
+                    _, _, _, _ = env.step_mask(masks[int(action_idx)])
+                    next_feature = _current_policy_feature(env, forecast_cfg)
+                    action_features = masks[int(action_idx)].astype(np.float32)
+                    rows.append(np.concatenate([feature, action_features], axis=0).astype(np.float32))
+                    deltas.append((next_feature - feature).astype(np.float32))
+                restore_env(env, state_snapshot)
+            action = beam_search_teacher_action(env, masks, teacher_cfg)
+            _, _, done, _ = env.step_mask(action)
+            if done:
+                break
+    if not rows or feature_dim is None:
+        raise ValueError("No feature-transition rows were collected")
+    return FeatureTransitionDataset(
+        inputs=np.vstack(rows).astype(np.float32),
+        deltas=np.vstack(deltas).astype(np.float32),
+        feature_dim=int(feature_dim),
+        n_sensors=int(masks.shape[1]),
+    )
+
+
 def train_action_cost_model(dataset: ActionCostDataset, cfg: ActionCostTrainingConfig) -> tuple[Any, dict[str, list[float]]]:
     torch, nn, DataLoader, TensorDataset = _torch_modules()
     x = np.asarray(dataset.inputs, dtype=np.float32)
@@ -182,6 +247,46 @@ def train_action_cost_model(dataset: ActionCostDataset, cfg: ActionCostTrainingC
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(int(cfg.seed))
     model = ActionCostNet(input_dim=x.shape[1], hidden_dim=int(cfg.hidden_dim)).to(device)
+    loader = DataLoader(
+        TensorDataset(torch.as_tensor(x, dtype=torch.float32), torch.as_tensor(y, dtype=torch.float32)),
+        batch_size=max(1, int(cfg.batch_size)),
+        shuffle=True,
+        drop_last=False,
+    )
+    optimizer = torch.optim.AdamW(model.parameters(), lr=float(cfg.learning_rate), weight_decay=float(cfg.weight_decay))
+    history = {"loss": []}
+    for _ in range(int(cfg.epochs)):
+        losses: list[float] = []
+        model.train()
+        for xb, yb in loader:
+            xb = xb.to(device)
+            yb = yb.to(device)
+            pred = model(xb)
+            loss = nn.functional.mse_loss(pred, yb)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            losses.append(float(loss.detach().cpu().item()))
+        history["loss"].append(float(np.mean(losses)) if losses else float("nan"))
+    return model.eval(), history
+
+
+def train_feature_transition_model(
+    dataset: FeatureTransitionDataset,
+    cfg: ActionCostTrainingConfig,
+) -> tuple[Any, dict[str, list[float]]]:
+    torch, nn, DataLoader, TensorDataset = _torch_modules()
+    x = np.asarray(dataset.inputs, dtype=np.float32)
+    y = np.asarray(dataset.deltas, dtype=np.float32)
+    device = _select_device(torch, str(cfg.device))
+    torch.manual_seed(int(cfg.seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(cfg.seed))
+    model = FeatureTransitionNet(
+        input_dim=x.shape[1],
+        output_dim=int(dataset.feature_dim),
+        hidden_dim=int(cfg.hidden_dim),
+    ).to(device)
     loader = DataLoader(
         TensorDataset(torch.as_tensor(x, dtype=torch.float32), torch.as_tensor(y, dtype=torch.float32)),
         batch_size=max(1, int(cfg.batch_size)),
@@ -301,6 +406,30 @@ class ActionCostNet:
                 return self.net(x)
 
         return _ActionCostNet()
+
+
+class FeatureTransitionNet:
+    def __new__(cls, *, input_dim: int, output_dim: int, hidden_dim: int) -> Any:
+        _, nn, _, _ = _torch_modules()
+
+        class _FeatureTransitionNet(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.input_dim = int(input_dim)
+                self.output_dim = int(output_dim)
+                self.hidden_dim = int(hidden_dim)
+                self.net = nn.Sequential(
+                    nn.Linear(int(input_dim), int(hidden_dim)),
+                    nn.Tanh(),
+                    nn.Linear(int(hidden_dim), int(hidden_dim)),
+                    nn.Tanh(),
+                    nn.Linear(int(hidden_dim), int(output_dim)),
+                )
+
+            def forward(self, x: Any) -> Any:
+                return self.net(x)
+
+        return _FeatureTransitionNet()
 
 
 @dataclass
@@ -667,6 +796,161 @@ class ForecastAwareAdvantageResidualPolicy(V2Policy):
         return np.asarray(valid, dtype=bool)
 
 
+@dataclass
+class ForecastAwareRolloutValuePolicy(V2Policy):
+    cost_model: Any
+    transition_model: Any
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    anchor_mask: tuple[bool, ...] | np.ndarray
+    device: str = "auto"
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None
+    advantage_threshold: float = 0.0
+    planning_depth: int = 2
+    beam_width: int = 4
+    max_branch: int = 6
+    discount: float = 0.95
+    preserve_warming: bool = True
+    name: str = "forecast_aware_rollout_value"
+
+    def __post_init__(self) -> None:
+        torch, _, _, _ = _torch_modules()
+        self.device_obj = _select_device(torch, str(self.device))
+        self.cost_model.to(self.device_obj)
+        self.transition_model.to(self.device_obj)
+        self.cost_model.eval()
+        self.transition_model.eval()
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
+        self.anchor_idx = _candidate_index(self.candidate_masks, self.anchor_mask_arr)
+        self.has_action_support = self.allowed_action_indices is not None
+        self.allowed_action_mask = _allowed_action_mask(self.allowed_action_indices, self.candidate_masks.shape[0])
+        if self.anchor_idx is not None:
+            self.allowed_action_mask[int(self.anchor_idx)] = True
+        self.future_action_ids = np.flatnonzero(self.allowed_action_mask)
+        if self.future_action_ids.size == 0:
+            self.future_action_ids = np.arange(self.candidate_masks.shape[0], dtype=int)
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        feature = _current_policy_feature(env, self.forecast_cfg)
+        valid = feasible_candidate_mask(env, self.candidate_masks)
+        valid = self._apply_allowed_actions(valid)
+        valid = self._apply_warming_preservation(env, valid)
+        valid_ids = np.flatnonzero(valid)
+        if valid_ids.size == 0:
+            return self.anchor_mask_arr.astype(bool).copy()
+        best_idx, best_score = self._plan_from_feature(feature, valid_ids)
+        anchor_score = self._score_repeated_anchor(feature)
+        advantage = float(anchor_score - best_score)
+        if best_idx is None or best_idx == self.anchor_idx or advantage <= float(self.advantage_threshold):
+            return self.anchor_mask_arr.astype(bool).copy()
+        return self.candidate_masks[int(best_idx)].astype(bool).copy()
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _plan_from_feature(self, feature: np.ndarray, valid_ids: np.ndarray) -> tuple[int | None, float]:
+        first_ids = np.asarray(valid_ids, dtype=int).reshape(-1)
+        beams: list[tuple[float, int | None, np.ndarray]] = [(0.0, None, np.asarray(feature, dtype=np.float32))]
+        depth = max(1, int(self.planning_depth))
+        for step in range(depth):
+            expanded: list[tuple[float, int | None, np.ndarray]] = []
+            for score_so_far, first_idx, beam_feature in beams:
+                action_ids = first_ids if step == 0 else self.future_action_ids
+                costs = self._predict_costs(beam_feature, action_ids)
+                if costs.size == 0:
+                    continue
+                order = np.argsort(costs, kind="stable")[: max(1, int(self.max_branch))]
+                for local_idx in order:
+                    action_idx = int(action_ids[int(local_idx)])
+                    action_features = self.candidate_masks[action_idx].astype(np.float32)
+                    step_cost = float(costs[int(local_idx)])
+                    next_feature = self._predict_next_feature(beam_feature, action_features)
+                    expanded.append(
+                        (
+                            float(score_so_far + (float(self.discount) ** step) * step_cost),
+                            int(action_idx) if first_idx is None else int(first_idx),
+                            next_feature,
+                        )
+                    )
+            if not expanded:
+                break
+            expanded.sort(key=lambda item: item[0])
+            beams = expanded[: max(1, int(self.beam_width))]
+        completed = [beam for beam in beams if beam[1] is not None]
+        if not completed:
+            return None, float("inf")
+        best = min(completed, key=lambda item: item[0])
+        return int(best[1]), float(best[0])
+
+    def _score_repeated_anchor(self, feature: np.ndarray) -> float:
+        current = np.asarray(feature, dtype=np.float32)
+        action_features = self.anchor_mask_arr.astype(np.float32)
+        total = 0.0
+        for step in range(max(1, int(self.planning_depth))):
+            total += (float(self.discount) ** step) * self._predict_one_cost(current, action_features)
+            current = self._predict_next_feature(current, action_features)
+        return float(total)
+
+    def _predict_costs(self, feature: np.ndarray, action_ids: np.ndarray) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        ids = np.asarray(action_ids, dtype=int).reshape(-1)
+        if ids.size == 0:
+            return np.asarray([], dtype=float)
+        rows = [
+            np.concatenate([feature, self.candidate_masks[int(action_idx)].astype(np.float32)], axis=0)
+            for action_idx in ids
+        ]
+        with torch.no_grad():
+            x = torch.as_tensor(np.vstack(rows).astype(np.float32), dtype=torch.float32, device=self.device_obj)
+            return self.cost_model(x).reshape(-1).detach().cpu().numpy().astype(float)
+
+    def _predict_one_cost(self, feature: np.ndarray, action_features: np.ndarray) -> float:
+        torch, _, _, _ = _torch_modules()
+        row = np.concatenate([feature, action_features], axis=0).astype(np.float32)
+        with torch.no_grad():
+            x = torch.as_tensor(row.reshape(1, -1), dtype=torch.float32, device=self.device_obj)
+            return float(self.cost_model(x).reshape(-1).detach().cpu().numpy()[0])
+
+    def _predict_next_feature(self, feature: np.ndarray, action_features: np.ndarray) -> np.ndarray:
+        torch, _, _, _ = _torch_modules()
+        row = np.concatenate([feature, action_features], axis=0).astype(np.float32)
+        with torch.no_grad():
+            x = torch.as_tensor(row.reshape(1, -1), dtype=torch.float32, device=self.device_obj)
+            delta = self.transition_model(x).reshape(-1).detach().cpu().numpy().astype(np.float32)
+        return (np.asarray(feature, dtype=np.float32) + delta).astype(np.float32)
+
+    def _apply_warming_preservation(self, env: WarmupSchedulingEnv, valid: np.ndarray) -> np.ndarray:
+        if not bool(self.preserve_warming):
+            return np.asarray(valid, dtype=bool)
+        required = np.asarray(
+            [
+                str(env.runtimes[sid].mode.name).lower() == "warming" and int(env.runtimes[sid].warm_remaining) > 0
+                for sid in env.sensor_ids
+            ],
+            dtype=bool,
+        )
+        if not np.any(required):
+            return np.asarray(valid, dtype=bool)
+        keep_warming = np.all(self.candidate_masks[:, required], axis=1)
+        guarded = np.asarray(valid, dtype=bool) & keep_warming
+        if np.any(guarded):
+            return guarded
+        return np.asarray(valid, dtype=bool)
+
+    def _apply_allowed_actions(self, valid: np.ndarray) -> np.ndarray:
+        allowed = np.asarray(valid, dtype=bool) & self.allowed_action_mask
+        if np.any(allowed):
+            return allowed
+        if bool(self.has_action_support):
+            return np.zeros_like(np.asarray(valid, dtype=bool))
+        return np.asarray(valid, dtype=bool)
+
+
 def _torch_modules() -> tuple[Any, Any, Any, Any]:
     import torch
     from torch import nn
@@ -753,3 +1037,9 @@ def _candidate_index(candidates: np.ndarray, mask: np.ndarray) -> int | None:
     if ids.size == 0:
         return None
     return int(ids[0])
+
+
+def _current_policy_feature(env: WarmupSchedulingEnv, forecast_cfg: ForecastContextConfig) -> np.ndarray:
+    state = env._state().astype(np.float32)
+    forecast = build_event_forecast(env.truth_df, int(env.current_idx), forecast_cfg)
+    return append_event_forecast(state, forecast)
