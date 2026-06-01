@@ -142,6 +142,18 @@ will continue toward learned rollout-value / online planning.
   advantage residual policy, selecting deployables on validation rather than
   committing to advantage residual alone.
 - [x] Add `learned_hybrid_residual_calib_safe` preset for that hybrid route.
+- [x] Add guarded validation deployable selection:
+  `learned_hybrid_residual_guarded_safe`. It keeps the existing validation
+  selection path split-compliant but prefers deployable policies whose
+  validation margins over the static anchor are not driven by a single
+  overfitted mean improvement.
+- [x] Add an event-threshold residual candidate:
+  `learned_hybrid_event_guarded_safe`. It uses the learned event forecaster to
+  trigger a validation-calibrated switch from the static anchor to a
+  teacher-supported event action, then lets guarded validation choose among
+  value-residual, advantage-residual, and event-threshold deployables.
+- [ ] Run server n=5 event-threshold hybrid candidate:
+  `v1_claim_learned_hybrid_event_guarded_n5_20260601`.
 - [ ] Scale the final strong candidate beyond the old n=5 single-setting gate:
   more seeds, at least two budgets, and at least one event-regime perturbation.
 - **Status:** in_progress

@@ -690,3 +690,46 @@
   `--include-value-residual-policy` and `--include-advantage-residual-policy`
   plus `--deployable-selection validation`. Local core tests remain `17
   passed`.
+
+## 2026-06-01 Continuation
+- Restored planning context after compaction and checked the active server run
+  `v1_claim_learned_hybrid_residual_n5_20260601`.
+- Current remote state at 08:56 CST: all five seeds under
+  `v1/artifacts/claim_suite_semimarkov_n5_learned_hybrid_residual` have
+  completed teacher collection, BC, one DAgger iteration, action-cost training,
+  and anchor-advantage training. No `gate_summary.json` files have been written
+  yet, so the run is still in calibration/final evaluation.
+- Server root disk remains tight (`/` about 9.3GB free). Avoided launching a
+  new artifact-heavy experiment while this run is active.
+- Implemented guarded validation deployable selection locally:
+  `forecast_cmdp.selection.choose_deployable_validation_row`, new runner args
+  `--deployable-selection-criterion static_margin_guard`,
+  `--deployable-selection-min-mean-margin`,
+  `--deployable-selection-min-start-margin`, and
+  `--deployable-selection-max-negative-starts`.
+- Added claim-suite preset `learned_hybrid_residual_guarded_safe`, which keeps
+  value residual + advantage residual + learned event forecast, but selects the
+  deployable policy on validation using a static-anchor margin guard.
+- Local validation:
+  `python -m py_compile v1/forecast_cmdp/*.py v1/scripts/*.py` passed;
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reported `18 passed`.
+- Aggregated and synced `learned_hybrid_residual_calib_safe`. Result:
+  `claim_pass=false`, deployable `3/5`, mean deployable margin `+0.000180`,
+  median `+0.000904`, teacher `5/5`, sign-test `p=1.0`. Seed44 and seed45
+  remain final-test failures.
+- Parsed validation rows and found the selection bug/limitation: seed43, seed44
+  and seed45 value-residual were not better than static on validation, but the
+  selector still chose value-residual because it only compared deployable
+  policies against each other. This confirms that repeating the same hybrid
+  will not strengthen the claim.
+- Implemented `ForecastAwareEventThresholdPolicy` and preset
+  `learned_hybrid_event_guarded_safe`. The policy defaults to the
+  validation-selected static anchor and switches to a teacher-supported event
+  action only when the learned event probability crosses a validation-selected
+  threshold.
+- Local validation after the event-threshold route:
+  `python -m py_compile v1/forecast_cmdp/*.py v1/scripts/*.py` passed;
+  `conda run -n darts python -m pytest -q v1/tests/test_forecast_cmdp_core.py`
+  reported `19 passed`; dry-run verified the new preset includes
+  `--include-event-threshold-policy`.

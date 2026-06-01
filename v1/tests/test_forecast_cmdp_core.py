@@ -39,6 +39,7 @@ from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
     ForecastAwareCyclePolicy,
+    ForecastAwareEventThresholdPolicy,
     ForecastAwareKNNPolicy,
     ForecastAwareMaskBCPolicy,
     load_bc_policy_checkpoint,
@@ -48,6 +49,7 @@ from forecast_cmdp.policy import (
 )
 from forecast_cmdp.protocol import task_focus_metrics
 from forecast_cmdp.reuse import ensure_archive_src
+from forecast_cmdp.selection import choose_deployable_validation_row
 
 ensure_archive_src()
 
@@ -332,6 +334,40 @@ def test_task_focus_metrics_uses_event_filtered_normalized_error():
     assert np.isclose(metrics["task_error_mean"], 1.5)
 
 
+def test_static_margin_guard_prefers_robust_validation_policy():
+    rows = [
+        {
+            "policy": "forecast_aware_advantage_residual",
+            "objective": 0.91,
+            "power_mean": 1.0,
+            "warmup_abort_count": 0,
+            "objective_margin_mean": 0.03,
+            "objective_margin_min": -0.05,
+            "negative_start_count": 2,
+        },
+        {
+            "policy": "forecast_aware_value_residual",
+            "objective": 0.93,
+            "power_mean": 1.0,
+            "warmup_abort_count": 0,
+            "objective_margin_mean": 0.01,
+            "objective_margin_min": -0.005,
+            "negative_start_count": 1,
+        },
+    ]
+    selected_mean = choose_deployable_validation_row(rows.copy(), criterion="mean_objective")
+    assert selected_mean["policy"] == "forecast_aware_advantage_residual"
+    selected_guard = choose_deployable_validation_row(
+        rows.copy(),
+        criterion="static_margin_guard",
+        min_mean_margin=0.0,
+        min_start_margin=-0.01,
+        max_negative_starts=1,
+    )
+    assert selected_guard["policy"] == "forecast_aware_value_residual"
+    assert selected_guard["static_margin_guard_pass"]
+
+
 def test_teacher_dataset_and_bc_policy_smoke(tmp_path):
     env = make_env()
     masks = enumerate_action_masks(3, max_active=2)
@@ -488,6 +524,32 @@ def test_bc_policy_can_preserve_warming_sensor():
         allowed_action_indices=(met_snow_idx,),
     )
     assert support_guarded.act_mask(env).tolist() == [True, True, False]
+
+
+def test_event_threshold_policy_switches_on_forecast_probability():
+    env = make_env()
+    truth = env.truth_df.copy()
+    truth["learned_event_p_h1"] = 0.0
+    truth.loc[20:, "learned_event_p_h1"] = 0.8
+    env.truth_df = truth
+    masks = enumerate_action_masks(3, max_active=2)
+    anchor = (True, False, False)
+    event_idx = int(np.flatnonzero(np.all(masks == np.asarray([[True, False, True]], dtype=bool), axis=1))[0])
+    policy = ForecastAwareEventThresholdPolicy(
+        candidate_masks=masks,
+        forecast_cfg=ForecastContextConfig(
+            horizon=1,
+            learned_event_probability_columns=("learned_event_p_h1",),
+        ),
+        anchor_mask=anchor,
+        event_action_idx=event_idx,
+        threshold=0.5,
+        aggregation="max",
+    )
+    env.reset(start_idx=18)
+    assert policy.act_mask(env).tolist() == [True, False, False]
+    env.reset(start_idx=22)
+    assert policy.act_mask(env).tolist() == [True, False, True]
 
 
 def test_action_cost_policy_smoke():

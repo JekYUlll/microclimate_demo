@@ -314,3 +314,35 @@
   should not replace the stable value-residual policy with direct advantage
   regression; it should treat advantage residual as an optional deployable
   candidate selected against the value-residual baseline on validation.
+
+## Guarded Deployable Selection Finding
+- The failed anchor-advantage route shows a specific validation risk: a
+  deployable policy can improve a task-event term or win the validation mean
+  while still making large harmful deviations from the static anchor on some
+  windows. A split-compliant fix is to keep final-test untouched but make
+  validation selection margin-aware: prefer policies that beat the static
+  anchor on mean validation objective and do not lose badly on individual
+  validation windows.
+- This is not a posthoc final-test filter. The new `static_margin_guard`
+  criterion is a deployable-selection rule applied before final replay. Its
+  purpose is to choose between value-residual and advantage-residual candidates
+  more robustly, not to change the teacher or the objective.
+- The completed hybrid run exposed a stricter issue: in three seeds the
+  value-residual policy was not even better than the static anchor on
+  validation, but the selector still deployed it because it selected only among
+  deployable policies. A static-aware guard prevents harmful deployment, but by
+  itself it cannot create wins. The next deployable mechanism needs a simpler
+  dynamic trigger that can reproduce the teacher's event-timing advantage.
+
+## Event-Threshold Residual Finding
+- The current teacher label distribution is dominated by a small set of
+  event-sensing masks such as `met_station_core|radiometer_basic|laser_disdrometer|fc4_flux`
+  and `met_station_core|surface_temp_ir|laser_disdrometer`. This suggests a
+  lower-variance deployable controller: keep the selected static anchor by
+  default, and switch to a high-frequency teacher event action only when the
+  learned causal event forecast crosses a calibrated threshold.
+- This route is closer to the original claim than another action-value model:
+  the deployed decision explicitly depends on learned future event probability,
+  the switched action is teacher-supported, and all action/threshold choices are
+  validation-only. It may still fail, but it directly tests whether the dynamic
+  sensing value can be recovered with a lower-variance policy class.

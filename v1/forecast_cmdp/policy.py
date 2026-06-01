@@ -480,6 +480,63 @@ class ForecastAwareResidualBCPolicy(V2Policy):
 
 
 @dataclass
+class ForecastAwareEventThresholdPolicy(V2Policy):
+    candidate_masks: np.ndarray
+    forecast_cfg: ForecastContextConfig
+    anchor_mask: tuple[bool, ...] | np.ndarray
+    event_action_idx: int
+    threshold: float
+    aggregation: str = "max"
+    preserve_warming: bool = True
+    name: str = "forecast_aware_event_threshold"
+
+    def __post_init__(self) -> None:
+        self.candidate_masks = np.asarray(self.candidate_masks, dtype=bool)
+        self.anchor_mask_arr = np.asarray(self.anchor_mask, dtype=bool).reshape(-1)
+        self.event_action_idx = int(self.event_action_idx)
+        if self.event_action_idx < 0 or self.event_action_idx >= self.candidate_masks.shape[0]:
+            raise ValueError("event_action_idx is outside candidate mask range")
+        if str(self.aggregation) not in {"max", "mean", "first"}:
+            raise ValueError(f"Unsupported event threshold aggregation: {self.aggregation}")
+
+    def reset(self) -> None:
+        pass
+
+    def act_mask(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        forecast = build_event_forecast(env.truth_df, int(env.current_idx), self.forecast_cfg)
+        event_score = self._event_score(forecast.probabilities)
+        if event_score >= float(self.threshold):
+            mask = self.candidate_masks[int(self.event_action_idx)].astype(bool).copy()
+        else:
+            mask = self.anchor_mask_arr.astype(bool).copy()
+        if bool(self.preserve_warming):
+            mask = self._preserve_warming(env, mask)
+        return mask
+
+    def act_scores(self, env: WarmupSchedulingEnv) -> np.ndarray:
+        mask = self.act_mask(env)
+        return np.where(mask, 1.0, -1.0)
+
+    def _event_score(self, probabilities: np.ndarray) -> float:
+        probs = np.asarray(probabilities, dtype=float).reshape(-1)
+        if probs.size == 0:
+            return 0.0
+        if str(self.aggregation) == "mean":
+            return float(np.mean(probs))
+        if str(self.aggregation) == "first":
+            return float(probs[0])
+        return float(np.max(probs))
+
+    def _preserve_warming(self, env: WarmupSchedulingEnv, mask: np.ndarray) -> np.ndarray:
+        out = np.asarray(mask, dtype=bool).copy()
+        for idx, sid in enumerate(env.sensor_ids):
+            runtime = env.runtimes[sid]
+            if str(runtime.mode.name).lower() == "warming" and int(runtime.warm_remaining) > 0:
+                out[int(idx)] = True
+        return out
+
+
+@dataclass
 class ForecastAwareMaskBCPolicy(V2Policy):
     model: Any
     forecast_cfg: ForecastContextConfig

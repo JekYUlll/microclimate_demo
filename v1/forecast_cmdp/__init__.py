@@ -19,6 +19,7 @@ from .mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, beam_search_teacher
 from .policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareEventThresholdPolicy,
     load_bc_policy_checkpoint,
     save_bc_policy_checkpoint,
     train_bc_classifier,
@@ -33,6 +34,7 @@ __all__ = [
     "ForecastContextConfig",
     "ForecastAwareAdvantageResidualPolicy",
     "ForecastAwareBCPolicy",
+    "ForecastAwareEventThresholdPolicy",
     "MpcTeacherConfig",
     "MpcTeacherPolicy",
     "TeacherDataset",

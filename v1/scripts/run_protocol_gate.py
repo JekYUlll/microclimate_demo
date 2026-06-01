@@ -52,6 +52,7 @@ from forecast_cmdp.mpc_teacher import MpcTeacherConfig, MpcTeacherPolicy, enumer
 from forecast_cmdp.policy import (
     BCTrainingConfig,
     ForecastAwareBCPolicy,
+    ForecastAwareEventThresholdPolicy,
     ForecastAwareKNNPolicy,
     ForecastAwareMaskBCPolicy,
     ForecastAwareResidualBCPolicy,
@@ -71,6 +72,7 @@ from forecast_cmdp.protocol import (
     save_rollout,
     task_focus_metrics,
 )
+from forecast_cmdp.selection import DEPLOYABLE_SELECTION_CRITERIA, choose_deployable_validation_row
 from v2.policies import FullOpenUnconstrainedScorePolicy, default_policies, StaticMaskPolicy  # noqa: E402
 
 
@@ -185,6 +187,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-mask-bc-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--mask-bc-required-rate", type=float, default=0.95)
     parser.add_argument("--mask-bc-anchor-bias", type=float, default=0.0)
+    parser.add_argument("--include-event-threshold-policy", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--event-threshold-support-top-k", type=int, default=4)
+    parser.add_argument(
+        "--event-threshold-grid",
+        nargs="*",
+        type=float,
+        default=[0.05, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8],
+    )
+    parser.add_argument("--event-threshold-aggregation-grid", nargs="*", default=["max", "mean", "first"])
     parser.add_argument("--include-knn-policy", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--knn-k", type=int, default=5)
     parser.add_argument("--include-cost-policy", action=argparse.BooleanOptionalAction, default=False)
@@ -214,6 +225,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cost-epochs", type=int, default=50)
     parser.add_argument("--cost-hidden-dim", type=int, default=256)
     parser.add_argument("--deployable-selection", choices=["all_final", "validation"], default="all_final")
+    parser.add_argument(
+        "--deployable-selection-criterion",
+        choices=list(DEPLOYABLE_SELECTION_CRITERIA),
+        default="mean_objective",
+    )
+    parser.add_argument("--deployable-selection-min-mean-margin", type=float, default=0.0)
+    parser.add_argument("--deployable-selection-min-start-margin", type=float, default=-1.0e9)
+    parser.add_argument("--deployable-selection-max-negative-starts", type=int, default=1_000_000)
     parser.add_argument("--bc-fallback-source", choices=["none", "validation_static"], default="none")
     parser.add_argument(
         "--bc-logit-margin-grid",
@@ -597,6 +616,42 @@ def main() -> None:
             f"final_sensor_accuracy={mask_bc_history['sensor_accuracy'][-1] if mask_bc_history and mask_bc_history.get('sensor_accuracy') else float('nan')} "
             f"required={[sensor_ids[idx] for idx in mask_bc_required_indices]}"
         )
+    event_threshold_action_idx = None
+    event_threshold_value = None
+    event_threshold_aggregation = None
+    event_threshold_validation_objective = None
+    if bool(args.include_event_threshold_policy):
+        (
+            event_threshold_action_idx,
+            event_threshold_value,
+            event_threshold_aggregation,
+            event_threshold_validation_objective,
+        ) = calibrate_event_threshold_policy(
+            args,
+            truth=truth,
+            sensors=sensors,
+            constraints=constraints,
+            cfg=validation_cfg,
+            oracle=oracle,
+            candidate_masks=candidate_masks,
+            forecast_cfg=forecast_cfg,
+            labels=teacher_dataset.labels,
+            anchor_idx=selected_static_idx,
+            anchor_mask=selected_static_mask,
+            state_columns=state_columns,
+            starts=starts["validation"].starts,
+        )
+        event_ids = (
+            "|".join(sensor_ids[idx] for idx in np.flatnonzero(candidate_masks[int(event_threshold_action_idx)]))
+            if event_threshold_action_idx is not None
+            else None
+        )
+        log(
+            "event-threshold calibration: "
+            f"action={event_threshold_action_idx} ids={event_ids} "
+            f"aggregation={event_threshold_aggregation} threshold={event_threshold_value} "
+            f"validation_objective={event_threshold_validation_objective:.6f}"
+        )
     cost_model = None
     cost_history = None
     cost_ensemble_models = None
@@ -879,6 +934,18 @@ def main() -> None:
                 anchor_bias=float(args.mask_bc_anchor_bias),
             )
         )
+    if bool(args.include_event_threshold_policy) and event_threshold_action_idx is not None:
+        policies.append(
+            ForecastAwareEventThresholdPolicy(
+                candidate_masks=candidate_masks,
+                forecast_cfg=forecast_cfg,
+                anchor_mask=selected_static_mask,
+                event_action_idx=int(event_threshold_action_idx),
+                threshold=float(event_threshold_value if event_threshold_value is not None else 1.0),
+                aggregation=str(event_threshold_aggregation or "max"),
+                preserve_warming=bool(args.bc_preserve_warming),
+            )
+        )
     if bool(args.include_cost_policy) and cost_model is not None:
         policies.append(
             ForecastAwareCostPolicy(
@@ -1032,6 +1099,7 @@ def main() -> None:
                 "forecast_aware_knn",
                 "forecast_aware_cost",
                 "forecast_aware_mask_bc",
+                "forecast_aware_event_threshold",
                 "forecast_aware_residual_bc",
                 "forecast_aware_value_residual",
                 "forecast_aware_ensemble_value",
@@ -1131,8 +1199,22 @@ def main() -> None:
             "anchor_bias": float(args.mask_bc_anchor_bias),
             "history": mask_bc_history,
         },
+        "event_threshold_policy": {
+            "included": bool(args.include_event_threshold_policy),
+            "support_top_k": int(args.event_threshold_support_top_k),
+            "action_idx": event_threshold_action_idx,
+            "threshold": event_threshold_value,
+            "aggregation": event_threshold_aggregation,
+            "threshold_grid": [float(x) for x in args.event_threshold_grid],
+            "aggregation_grid": [str(x) for x in args.event_threshold_aggregation_grid],
+            "validation_objective": event_threshold_validation_objective,
+        },
         "deployable_selection": {
             "mode": str(args.deployable_selection),
+            "criterion": str(args.deployable_selection_criterion),
+            "min_mean_margin": float(args.deployable_selection_min_mean_margin),
+            "min_start_margin": float(args.deployable_selection_min_start_margin),
+            "max_negative_starts": int(args.deployable_selection_max_negative_starts),
             "selected_policy": selected_deployable_name,
             "validation_rows": deployable_validation_rows,
         },
@@ -1838,6 +1920,83 @@ def calibrate_ensemble_value_policy(
     return float(best_beta), float(best_threshold), float(best_objective)
 
 
+def calibrate_event_threshold_policy(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    candidate_masks: np.ndarray,
+    forecast_cfg: ForecastContextConfig,
+    labels: np.ndarray,
+    anchor_idx: int | None,
+    anchor_mask: tuple[bool, ...],
+    state_columns: tuple[str, ...],
+    starts: tuple[int, ...],
+) -> tuple[int | None, float | None, str | None, float]:
+    support = action_support_from_labels(
+        labels,
+        n_actions=int(candidate_masks.shape[0]),
+        top_k=max(1, int(args.event_threshold_support_top_k)),
+        min_count=int(args.bc_action_support_min_count),
+        anchor_idx=None,
+    )
+    if support is None:
+        return None, None, None, float("inf")
+    event_actions = [int(idx) for idx in support if anchor_idx is None or int(idx) != int(anchor_idx)]
+    if not event_actions and anchor_idx is not None:
+        event_actions = [int(anchor_idx)]
+    thresholds = [float(x) for x in args.event_threshold_grid] or [0.5]
+    aggregations = [str(x) for x in args.event_threshold_aggregation_grid] or ["max"]
+    rows: list[tuple[float, float, int, float, str, int]] = []
+    sensor_ids = tuple(str(sensor.sensor_id) for sensor in sensors)
+    combo_idx = 0
+    for action_idx in event_actions:
+        for aggregation in aggregations:
+            if aggregation not in {"max", "mean", "first"}:
+                raise ValueError(f"Unsupported event-threshold aggregation: {aggregation}")
+            for threshold in thresholds:
+                policy = ForecastAwareEventThresholdPolicy(
+                    candidate_masks=candidate_masks,
+                    forecast_cfg=forecast_cfg,
+                    anchor_mask=anchor_mask,
+                    event_action_idx=int(action_idx),
+                    threshold=float(threshold),
+                    aggregation=str(aggregation),
+                    preserve_warming=bool(args.bc_preserve_warming),
+                    name=f"forecast_aware_event_threshold_calib_{combo_idx}",
+                )
+                metrics, objective = evaluate_validation_policy_metrics(
+                    args,
+                    truth=truth,
+                    sensors=sensors,
+                    constraints=constraints,
+                    cfg=cfg,
+                    oracle=oracle,
+                    policy=policy,
+                    state_columns=state_columns,
+                    sensor_ids=sensor_ids,
+                    starts=starts,
+                    seed_offset=170_000 + combo_idx * 101,
+                )
+                rows.append(
+                    (
+                        float(objective),
+                        float(metrics.get("power_mean", np.nan)),
+                        int(action_idx),
+                        float(threshold),
+                        str(aggregation),
+                        combo_idx,
+                    )
+                )
+                combo_idx += 1
+    rows.sort(key=lambda item: (item[0], item[1], item[5]))
+    best_objective, _, best_action_idx, best_threshold, best_aggregation, _ = rows[0]
+    return int(best_action_idx), float(best_threshold), str(best_aggregation), float(best_objective)
+
+
 def select_deployables_for_final(
     args: argparse.Namespace,
     *,
@@ -1856,6 +2015,7 @@ def select_deployables_for_final(
         "forecast_aware_knn",
         "forecast_aware_cost",
         "forecast_aware_mask_bc",
+        "forecast_aware_event_threshold",
         "forecast_aware_residual_bc",
         "forecast_aware_value_residual",
         "forecast_aware_ensemble_value",
@@ -1866,51 +2026,138 @@ def select_deployables_for_final(
     if not candidates:
         return policies, None, []
     rows: list[dict[str, object]] = []
+    static_start_objectives: list[float] = []
+    if str(args.deployable_selection_criterion) == "static_margin_guard":
+        static_candidates = [policy for policy in fixed if str(policy.name) == "validation_selected_static"]
+        if not static_candidates:
+            raise ValueError("static_margin_guard selection requires validation_selected_static in policy list")
+        static_policy = static_candidates[0]
+        for start_idx, start in enumerate(starts):
+            metrics, objective = evaluate_validation_policy_metrics(
+                args,
+                truth=truth,
+                sensors=sensors,
+                constraints=constraints,
+                cfg=cfg,
+                oracle=oracle,
+                policy=static_policy,
+                state_columns=state_columns,
+                sensor_ids=sensor_ids,
+                starts=(int(start),),
+                seed_offset=100_000 + int(start_idx) * 101,
+            )
+            del metrics
+            static_start_objectives.append(float(objective))
     for idx, policy in enumerate(candidates):
-        result, _ = evaluate_policy_over_starts(
+        metrics, objective = evaluate_validation_policy_metrics(
+            args,
             truth=truth,
             sensors=sensors,
             constraints=constraints,
             cfg=cfg,
             oracle=oracle,
             policy=policy,
-            steps=int(args.static_selection_steps),
-            start_indices=starts,
+            state_columns=state_columns,
+            sensor_ids=sensor_ids,
+            starts=starts,
             seed_offset=110_000 + idx * 101,
         )
-        metrics = rich_metrics(
-            result,
-            sensor_ids=sensor_ids,
-            state_columns=state_columns,
-            per_step_budget=float(args.budget),
-            startup_peak_budget=float(args.startup_peak_budget),
-        )
-        metrics.update(
-            task_focus_metrics(
-                result,
-                state_columns=state_columns,
-                task_error_columns=tuple(str(x) for x in args.task_error_columns),
-                task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
-                event_only=bool(args.task_error_event_only),
+        row = {
+            "policy": str(policy.name),
+            "objective": float(objective),
+            "power_mean": float(metrics.get("power_mean", np.nan)),
+            "warmup_abort_count": int(metrics.get("warmup_abort_count", 0)),
+        }
+        if static_start_objectives:
+            candidate_start_objectives: list[float] = []
+            for start_idx, start in enumerate(starts):
+                _, start_objective = evaluate_validation_policy_metrics(
+                    args,
+                    truth=truth,
+                    sensors=sensors,
+                    constraints=constraints,
+                    cfg=cfg,
+                    oracle=oracle,
+                    policy=policy,
+                    state_columns=state_columns,
+                    sensor_ids=sensor_ids,
+                    starts=(int(start),),
+                    seed_offset=115_000 + idx * 1009 + int(start_idx) * 101,
+                )
+                candidate_start_objectives.append(float(start_objective))
+            margins = np.asarray(static_start_objectives, dtype=float) - np.asarray(
+                candidate_start_objectives,
+                dtype=float,
             )
-        )
-        objective = final_objective(
-            metrics,
-            mode=str(args.objective_mode),
-            task_error_weight=float(args.task_error_weight),
-        )
-        rows.append(
-            {
-                "policy": str(policy.name),
-                "objective": float(objective),
-                "power_mean": float(metrics.get("power_mean", np.nan)),
-                "warmup_abort_count": int(metrics.get("warmup_abort_count", 0)),
-            }
-        )
-    rows.sort(key=lambda item: (float(item["objective"]), float(item["power_mean"]), int(item["warmup_abort_count"])))
-    selected_name = str(rows[0]["policy"])
+            row.update(
+                {
+                    "static_start_objectives": [float(x) for x in static_start_objectives],
+                    "candidate_start_objectives": [float(x) for x in candidate_start_objectives],
+                    "objective_margin_mean": float(np.mean(margins)),
+                    "objective_margin_min": float(np.min(margins)),
+                    "negative_start_count": int(np.sum(margins < 0.0)),
+                }
+            )
+        rows.append(row)
+    selected_row = choose_deployable_validation_row(
+        rows,
+        criterion=str(args.deployable_selection_criterion),
+        min_mean_margin=float(args.deployable_selection_min_mean_margin),
+        min_start_margin=float(args.deployable_selection_min_start_margin),
+        max_negative_starts=int(args.deployable_selection_max_negative_starts),
+    )
+    selected_name = str(selected_row["policy"])
     selected = [policy for policy in candidates if str(policy.name) == selected_name][0]
     return [*fixed, selected], selected_name, rows
+
+
+def evaluate_validation_policy_metrics(
+    args: argparse.Namespace,
+    *,
+    truth: pd.DataFrame,
+    sensors: list[object],
+    constraints: object,
+    cfg: object,
+    oracle: object | None,
+    policy: object,
+    state_columns: tuple[str, ...],
+    sensor_ids: tuple[str, ...],
+    starts: tuple[int, ...],
+    seed_offset: int,
+) -> tuple[dict[str, object], float]:
+    result, _ = evaluate_policy_over_starts(
+        truth=truth,
+        sensors=sensors,
+        constraints=constraints,
+        cfg=cfg,
+        oracle=oracle,
+        policy=policy,
+        steps=int(args.static_selection_steps),
+        start_indices=starts,
+        seed_offset=int(seed_offset),
+    )
+    metrics = rich_metrics(
+        result,
+        sensor_ids=sensor_ids,
+        state_columns=state_columns,
+        per_step_budget=float(args.budget),
+        startup_peak_budget=float(args.startup_peak_budget),
+    )
+    metrics.update(
+        task_focus_metrics(
+            result,
+            state_columns=state_columns,
+            task_error_columns=tuple(str(x) for x in args.task_error_columns),
+            task_error_scales=tuple(float(x) for x in args.task_error_scales) if args.task_error_scales else None,
+            event_only=bool(args.task_error_event_only),
+        )
+    )
+    objective = final_objective(
+        metrics,
+        mode=str(args.objective_mode),
+        task_error_weight=float(args.task_error_weight),
+    )
+    return metrics, float(objective)
 
 
 def action_support_from_labels(
