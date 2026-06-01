@@ -941,3 +941,7 @@
   validation-guarded deployable candidates alongside event-threshold and
   value-residual. This tests whether direct teacher imitation was excluded too
   early from the B=1.35 candidate set.
+- Committed as `03179e3 Add guarded BC hybrid preset` and launched B=1.35
+  BC/KNN guarded experiment in tmux `v1_budget1p35_bc_guarded_20260601`, output
+  root `v1/artifacts/claim_suite_budget1p35_bc_guarded`. Early logs show all
+  seeds computing the train-split static candidate prior.
