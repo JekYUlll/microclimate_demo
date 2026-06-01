@@ -964,3 +964,12 @@
   (`cuda:1`), `v1_prepare_b1p20_50_52` (`cuda:4`), and
   `v1_prepare_b1p20_53_55` (`cuda:5`). This prepares truth CSVs, split
   manifests, and frozen TCN oracles without archived PPO training.
+- The B=1.20 extension inputs completed: all seeds `46--55` have
+  `truth_energy_split.csv`, `split_protocol_manifest.json`, and
+  `v2_tcn_oracle.pt`.
+- Launched the B=1.20 extension claim-suite in tmux
+  `v1_claim_b1p20_ext_46_55_20260601`, output root
+  `v1/artifacts/claim_suite_b1p20_ext_learned_hybrid_event_guarded_46_55`,
+  preset `learned_hybrid_event_guarded_safe`, seeds `46--55`,
+  `B=1.20`, `startup_peak_budget=1.60`, three-way parallel on GPUs
+  `1/4/5`, with CUDA oracle/BC execution.
