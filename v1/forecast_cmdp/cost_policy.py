@@ -69,8 +69,16 @@ def collect_action_cost_dataset(
     steps_per_start: int,
     teacher_cfg: MpcTeacherConfig,
     forecast_cfg: ForecastContextConfig,
+    normalize_costs: bool = True,
+    allowed_action_indices: tuple[int, ...] | np.ndarray | None = None,
+    anchor_mask: tuple[bool, ...] | np.ndarray | None = None,
 ) -> ActionCostDataset:
     masks = np.asarray(candidate_masks, dtype=bool)
+    allowed = _allowed_action_mask(allowed_action_indices, masks.shape[0])
+    if anchor_mask is not None:
+        anchor_idx = _candidate_index(masks, np.asarray(anchor_mask, dtype=bool).reshape(-1))
+        if anchor_idx is not None:
+            allowed[int(anchor_idx)] = True
     rows: list[np.ndarray] = []
     costs_out: list[float] = []
     feature_dim: int | None = None
@@ -81,7 +89,7 @@ def collect_action_cost_dataset(
             feature = append_event_forecast(env._state().astype(np.float32), forecast)
             feature_dim = int(feature.shape[0])
             costs = beam_search_first_action_costs(env, masks, teacher_cfg)
-            finite = np.flatnonzero(np.isfinite(costs))
+            finite = np.flatnonzero(np.isfinite(costs) & allowed)
             if finite.size:
                 finite_costs = costs[finite].astype(float)
                 center = float(np.min(finite_costs))
@@ -90,7 +98,10 @@ def collect_action_cost_dataset(
                 for action_idx in finite:
                     action_features = masks[int(action_idx)].astype(np.float32)
                     rows.append(np.concatenate([feature, action_features], axis=0).astype(np.float32))
-                    costs_out.append(float((costs[int(action_idx)] - center) / scale))
+                    if bool(normalize_costs):
+                        costs_out.append(float((costs[int(action_idx)] - center) / scale))
+                    else:
+                        costs_out.append(float(costs[int(action_idx)]))
             action = beam_search_teacher_action(env, masks, teacher_cfg)
             _, _, done, _ = env.step_mask(action)
             if done:

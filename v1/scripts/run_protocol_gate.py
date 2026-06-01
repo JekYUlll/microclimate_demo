@@ -772,6 +772,8 @@ def main() -> None:
     cost_history = None
     cost_ensemble_models = None
     cost_ensemble_histories = None
+    rollout_value_cost_model = None
+    rollout_value_cost_history = None
     value_residual_support = None
     value_residual_threshold = None
     value_residual_validation_objective = None
@@ -793,7 +795,6 @@ def main() -> None:
         bool(args.include_cost_policy)
         or bool(args.include_value_residual_policy)
         or bool(args.include_ensemble_value_policy)
-        or bool(args.include_rollout_value_policy)
     ):
         log("collecting action-cost dataset")
         cost_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
@@ -919,13 +920,42 @@ def main() -> None:
             f"validation_objective={value_residual_validation_objective:.6f} "
             f"support={list(value_residual_support) if value_residual_support is not None else None}"
         )
-    if bool(args.include_rollout_value_policy) and cost_model is not None:
+    if bool(args.include_rollout_value_policy):
         rollout_value_support = action_support_from_labels(
             teacher_dataset.labels,
             n_actions=int(candidate_masks.shape[0]),
             top_k=int(args.rollout_value_support_top_k),
             min_count=int(args.bc_action_support_min_count),
             anchor_idx=selected_static_idx,
+        )
+        log("collecting raw action-cost dataset for rollout planner")
+        rollout_cost_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
+        rollout_cost_dataset = collect_action_cost_dataset(
+            rollout_cost_env,
+            candidate_masks,
+            start_indices=starts["train"].starts,
+            steps_per_start=int(args.train_steps),
+            teacher_cfg=teacher_cfg,
+            forecast_cfg=forecast_cfg,
+            normalize_costs=False,
+            allowed_action_indices=rollout_value_support,
+            anchor_mask=selected_static_mask,
+        )
+        log(f"raw rollout action-cost dataset collected: rows={rollout_cost_dataset.inputs.shape[0]}")
+        rollout_cost_train_cfg = ActionCostTrainingConfig(
+            hidden_dim=int(args.cost_hidden_dim),
+            epochs=int(args.cost_epochs),
+            batch_size=512,
+            seed=int(args.seed) + 23,
+            device=str(args.bc_device),
+        )
+        rollout_value_cost_model, rollout_value_cost_history = train_action_cost_model(
+            rollout_cost_dataset,
+            rollout_cost_train_cfg,
+        )
+        log(
+            "raw rollout action-cost model training complete: "
+            f"final_loss={rollout_value_cost_history['loss'][-1] if rollout_value_cost_history and rollout_value_cost_history.get('loss') else float('nan')}"
         )
         log("collecting feature-transition dataset")
         transition_env = build_env_for_dataset(truth, sensors, constraints, train_cfg, oracle)
@@ -962,7 +992,7 @@ def main() -> None:
             constraints=constraints,
             cfg=validation_cfg,
             oracle=oracle,
-            cost_model=cost_model,
+            cost_model=rollout_value_cost_model,
             transition_model=rollout_value_transition_model,
             candidate_masks=candidate_masks,
             forecast_cfg=forecast_cfg,
@@ -1192,12 +1222,12 @@ def main() -> None:
         )
     if (
         bool(args.include_rollout_value_policy)
-        and cost_model is not None
+        and rollout_value_cost_model is not None
         and rollout_value_transition_model is not None
     ):
         policies.append(
             ForecastAwareRolloutValuePolicy(
-                cost_model=cost_model,
+                cost_model=rollout_value_cost_model,
                 transition_model=rollout_value_transition_model,
                 candidate_masks=candidate_masks,
                 forecast_cfg=forecast_cfg,
@@ -1532,6 +1562,8 @@ def main() -> None:
             "advantage_threshold": rollout_value_threshold,
             "advantage_grid": [float(x) for x in args.rollout_value_advantage_grid],
             "validation_objective": rollout_value_validation_objective,
+            "cost_target": "raw_teacher_rollout_cost",
+            "cost_history": rollout_value_cost_history,
             "transition_history": rollout_value_transition_history,
         },
         "ensemble_value_policy": {
