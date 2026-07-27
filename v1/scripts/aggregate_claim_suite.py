@@ -106,9 +106,14 @@ def collect_validation_rows(suite_roots: list[Path]) -> list[dict[str, object]]:
                         "power_mean": nullable_float(row.get("power_mean")),
                         "warmup_abort_count": row.get("warmup_abort_count", np.nan),
                         "objective_margin_mean": nullable_float(row.get("objective_margin_mean")),
+                        "objective_margin_median": nullable_float(row.get("objective_margin_median")),
+                        "objective_margin_q25": nullable_float(row.get("objective_margin_q25")),
                         "objective_margin_min": nullable_float(row.get("objective_margin_min")),
                         "negative_start_count": row.get("negative_start_count", np.nan),
                         "static_margin_guard_pass": bool(row.get("static_margin_guard_pass", False)),
+                        "static_margin_positive_center": bool(
+                            row.get("static_margin_positive_center", False)
+                        ),
                     }
                 )
     return rows
@@ -126,21 +131,52 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
         event_support_cycle = manifest.get("event_support_cycle_policy", {})
         if not isinstance(event_support_cycle, dict):
             event_support_cycle = {}
+        option_planner = manifest.get("option_planner_policy", {})
+        if not isinstance(option_planner, dict):
+            option_planner = {}
+        macro_option = manifest.get("macro_option_policy", {})
+        if not isinstance(macro_option, dict):
+            macro_option = {}
+        teacher_improvement_gate = manifest.get("teacher_improvement_gate_policy", {})
+        if not isinstance(teacher_improvement_gate, dict):
+            teacher_improvement_gate = {}
+        cost_knn = manifest.get("cost_knn_policy", {})
+        if not isinstance(cost_knn, dict):
+            cost_knn = {}
         teacher_rate = manifest.get("teacher_rate_policy", {})
         if not isinstance(teacher_rate, dict):
             teacher_rate = {}
         contextual_duty = manifest.get("contextual_duty_policy", {})
         if not isinstance(contextual_duty, dict):
             contextual_duty = {}
+        sequence_mask = manifest.get("sequence_mask_policy", {})
+        if not isinstance(sequence_mask, dict):
+            sequence_mask = {}
         teacher_cycle = manifest.get("teacher_cycle_policy", {})
         if not isinstance(teacher_cycle, dict):
             teacher_cycle = {}
         rollout_value = manifest.get("rollout_value_policy", {})
         if not isinstance(rollout_value, dict):
             rollout_value = {}
+        sequence_value = manifest.get("sequence_value_policy", {})
+        if not isinstance(sequence_value, dict):
+            sequence_value = {}
+        recurrent_value = manifest.get("recurrent_value_policy", {})
+        if not isinstance(recurrent_value, dict):
+            recurrent_value = {}
+        recurrent_advantage = manifest.get("recurrent_advantage_policy", {})
+        if not isinstance(recurrent_advantage, dict):
+            recurrent_advantage = {}
         static_objective = float(summary["validation_selected_static_objective"])
         teacher_objective = nullable_float(summary.get("teacher_reference_objective"))
         deployable_objective = nullable_float(summary.get("best_deployable_objective"))
+        deployable_selected = deployable_objective is not None
+        deployable_margin_selected = (
+            static_objective - deployable_objective if deployable_selected else np.nan
+        )
+        deployable_margin = (
+            deployable_margin_selected if deployable_selected else 0.0
+        )
         run_rows.append(
             {
                 "preset": preset,
@@ -150,10 +186,10 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "static_objective": static_objective,
                 "teacher_objective": teacher_objective,
                 "deployable_objective": deployable_objective,
+                "deployable_selected": deployable_selected,
                 "teacher_margin": static_objective - teacher_objective if teacher_objective is not None else np.nan,
-                "deployable_margin": static_objective - deployable_objective
-                if deployable_objective is not None
-                else np.nan,
+                "deployable_margin": deployable_margin,
+                "deployable_margin_selected": deployable_margin_selected,
                 "teacher_beats_static": bool(summary.get("teacher_beats_static", False)),
                 "gate_pass": bool(summary.get("gate_pass", False)),
                 "best_deployable_policy": str(summary.get("best_deployable_policy", "")),
@@ -164,6 +200,108 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "event_support_cycle_validation_objective": nullable_float(
                     event_support_cycle.get("validation_objective")
                 ),
+                "option_planner_included": bool(option_planner.get("included", False)),
+                "option_planner_support_top_k": option_planner.get("support_top_k", np.nan),
+                "option_planner_threshold": nullable_float(option_planner.get("threshold")),
+                "option_planner_aggregation": str(option_planner.get("aggregation", "")),
+                "option_planner_min_dwell": option_planner.get("min_dwell", np.nan),
+                "option_planner_cooldown": option_planner.get("cooldown", np.nan),
+                "option_planner_target_rate_weight": nullable_float(
+                    option_planner.get("target_rate_weight")
+                ),
+                "option_planner_rate_balance_weight": nullable_float(
+                    option_planner.get("rate_balance_weight")
+                ),
+                "option_planner_freshness_weight": nullable_float(
+                    option_planner.get("freshness_weight")
+                ),
+                "option_planner_transport_weight": nullable_float(
+                    option_planner.get("transport_weight")
+                ),
+                "option_planner_power_weight": nullable_float(option_planner.get("power_weight")),
+                "option_planner_switch_weight": nullable_float(option_planner.get("switch_weight")),
+                "option_planner_min_soc": nullable_float(option_planner.get("min_soc")),
+                "option_planner_calibration_criterion": str(
+                    option_planner.get("calibration_criterion", "")
+                ),
+                "option_planner_calibration_guard_pass": bool(
+                    (option_planner.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(option_planner.get("calibration_row"), dict)
+                else False,
+                "option_planner_validation_objective": nullable_float(
+                    option_planner.get("validation_objective")
+                ),
+                "macro_option_included": bool(macro_option.get("included", False)),
+                "macro_option_segment_len": macro_option.get("segment_len", np.nan),
+                "macro_option_k": macro_option.get("k", np.nan),
+                "macro_option_threshold": nullable_float(macro_option.get("event_threshold")),
+                "macro_option_aggregation": str(macro_option.get("aggregation", "")),
+                "macro_option_distance_weighting": str(macro_option.get("distance_weighting", "")),
+                "macro_option_refresh_interval": macro_option.get("refresh_interval", np.nan),
+                "macro_option_calibration_criterion": str(macro_option.get("calibration_criterion", "")),
+                "macro_option_calibration_guard_pass": bool(
+                    (macro_option.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(macro_option.get("calibration_row"), dict)
+                else False,
+                "macro_option_candidate_enabled": bool(macro_option.get("candidate_enabled", False)),
+                "macro_option_validation_objective": nullable_float(macro_option.get("validation_objective")),
+                "macro_option_teacher_rows": macro_option.get("teacher_rows", np.nan),
+                "teacher_improvement_gate_included": bool(teacher_improvement_gate.get("included", False)),
+                "teacher_improvement_gate_segment_len": teacher_improvement_gate.get("segment_len", np.nan),
+                "teacher_improvement_gate_k": teacher_improvement_gate.get("k", np.nan),
+                "teacher_improvement_gate_threshold": nullable_float(
+                    teacher_improvement_gate.get("gate_threshold")
+                ),
+                "teacher_improvement_gate_positive_rate": nullable_float(
+                    teacher_improvement_gate.get("training_positive_rate")
+                ),
+                "teacher_improvement_gate_final_accuracy": nullable_float(
+                    teacher_improvement_gate.get("training_final_accuracy")
+                ),
+                "teacher_improvement_gate_aggregation": str(
+                    teacher_improvement_gate.get("aggregation", "")
+                ),
+                "teacher_improvement_gate_distance_weighting": str(
+                    teacher_improvement_gate.get("distance_weighting", "")
+                ),
+                "teacher_improvement_gate_refresh_interval": teacher_improvement_gate.get(
+                    "refresh_interval", np.nan
+                ),
+                "teacher_improvement_gate_calibration_criterion": str(
+                    teacher_improvement_gate.get("calibration_criterion", "")
+                ),
+                "teacher_improvement_gate_calibration_guard_pass": bool(
+                    (teacher_improvement_gate.get("calibration_row") or {}).get(
+                        "static_margin_guard_pass", False
+                    )
+                )
+                if isinstance(teacher_improvement_gate.get("calibration_row"), dict)
+                else False,
+                "teacher_improvement_gate_candidate_enabled": bool(
+                    teacher_improvement_gate.get("candidate_enabled", False)
+                ),
+                "teacher_improvement_gate_validation_objective": nullable_float(
+                    teacher_improvement_gate.get("validation_objective")
+                ),
+                "teacher_improvement_gate_teacher_rows": teacher_improvement_gate.get(
+                    "teacher_rows", np.nan
+                ),
+                "cost_knn_included": bool(cost_knn.get("included", False)),
+                "cost_knn_support_top_k": cost_knn.get("support_top_k", np.nan),
+                "cost_knn_k": cost_knn.get("k", np.nan),
+                "cost_knn_threshold": nullable_float(cost_knn.get("advantage_threshold")),
+                "cost_knn_distance_weighting": str(cost_knn.get("distance_weighting", "")),
+                "cost_knn_calibration_criterion": str(cost_knn.get("calibration_criterion", "")),
+                "cost_knn_calibration_guard_pass": bool(
+                    (cost_knn.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(cost_knn.get("calibration_row"), dict)
+                else False,
+                "cost_knn_candidate_enabled": bool(cost_knn.get("candidate_enabled", False)),
+                "cost_knn_validation_objective": nullable_float(cost_knn.get("validation_objective")),
+                "cost_knn_memory_rows": cost_knn.get("memory_rows", np.nan),
                 "teacher_rate_blend": nullable_float(teacher_rate.get("blend")),
                 "teacher_rate_freshness_weight": nullable_float(teacher_rate.get("freshness_weight")),
                 "teacher_rate_power_weight": nullable_float(teacher_rate.get("power_weight")),
@@ -173,8 +311,38 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "contextual_duty_deficit_weight": nullable_float(contextual_duty.get("deficit_weight")),
                 "contextual_duty_freshness_weight": nullable_float(contextual_duty.get("freshness_weight")),
                 "contextual_duty_power_weight": nullable_float(contextual_duty.get("power_weight")),
+                "contextual_duty_calibration_criterion": str(
+                    contextual_duty.get("calibration_criterion", "")
+                ),
+                "contextual_duty_calibration_guard_pass": bool(
+                    (contextual_duty.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(contextual_duty.get("calibration_row"), dict)
+                else False,
                 "contextual_duty_validation_objective": nullable_float(
                     contextual_duty.get("validation_objective")
+                ),
+                "sequence_mask_included": bool(sequence_mask.get("included", False)),
+                "sequence_mask_anchor_bias": nullable_float(sequence_mask.get("anchor_bias")),
+                "sequence_mask_power_weight": nullable_float(sequence_mask.get("power_weight")),
+                "sequence_mask_calibration_criterion": str(
+                    sequence_mask.get("calibration_criterion", "")
+                ),
+                "sequence_mask_calibration_guard_pass": bool(
+                    (sequence_mask.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(sequence_mask.get("calibration_row"), dict)
+                else False,
+                "sequence_mask_validation_objective": nullable_float(
+                    sequence_mask.get("validation_objective")
+                ),
+                "sequence_mask_sensor_accuracy_final": final_history_value(
+                    sequence_mask.get("history"),
+                    key="sensor_accuracy",
+                ),
+                "sequence_mask_exact_match_final": final_history_value(
+                    sequence_mask.get("history"),
+                    key="exact_match",
                 ),
                 "teacher_cycle_included": bool(teacher_cycle.get("included", False)),
                 "teacher_cycle_max_lookahead": teacher_cycle.get("max_lookahead", np.nan),
@@ -186,6 +354,62 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
                 "rollout_value_cost_target": str(rollout_value.get("cost_target", "")),
                 "rollout_value_cost_loss_final": final_history_loss(rollout_value.get("cost_history")),
                 "rollout_value_transition_loss_final": final_history_loss(rollout_value.get("transition_history")),
+                "sequence_value_included": bool(sequence_value.get("included", False)),
+                "sequence_value_segment_len": sequence_value.get("segment_len", np.nan),
+                "sequence_value_threshold": nullable_float(sequence_value.get("advantage_threshold")),
+                "sequence_value_validation_objective": nullable_float(sequence_value.get("validation_objective")),
+                "sequence_value_candidate_enabled": bool(sequence_value.get("candidate_enabled", False)),
+                "sequence_value_rows": sequence_value.get("rows", np.nan),
+                "sequence_value_bank_rows": sequence_value.get("sequence_bank_rows", np.nan),
+                "sequence_value_loss_final": final_history_loss(sequence_value.get("history")),
+                "recurrent_value_included": bool(recurrent_value.get("included", False)),
+                "recurrent_value_support_top_k": recurrent_value.get("support_top_k", np.nan),
+                "recurrent_value_threshold": nullable_float(recurrent_value.get("advantage_threshold")),
+                "recurrent_value_rank_weight": nullable_float(recurrent_value.get("rank_weight")),
+                "recurrent_value_cost_dagger_iters": recurrent_value.get("cost_dagger_iters", np.nan),
+                "recurrent_value_cost_dagger_threshold": nullable_float(
+                    recurrent_value.get("cost_dagger_threshold")
+                ),
+                "recurrent_value_cost_dagger_steps": recurrent_value.get("cost_dagger_steps", np.nan),
+                "recurrent_value_calibration_criterion": str(
+                    recurrent_value.get("calibration_criterion", "")
+                ),
+                "recurrent_value_calibration_guard_pass": bool(
+                    (recurrent_value.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(recurrent_value.get("calibration_row"), dict)
+                else False,
+                "recurrent_value_validation_objective": nullable_float(
+                    recurrent_value.get("validation_objective")
+                ),
+                "recurrent_value_loss_final": final_history_loss(recurrent_value.get("history")),
+                "recurrent_value_best_action_accuracy_final": final_history_value(
+                    recurrent_value.get("history"),
+                    key="best_action_accuracy",
+                ),
+                "recurrent_advantage_included": bool(recurrent_advantage.get("included", False)),
+                "recurrent_advantage_support_top_k": recurrent_advantage.get("support_top_k", np.nan),
+                "recurrent_advantage_threshold": nullable_float(recurrent_advantage.get("advantage_threshold")),
+                "recurrent_advantage_rank_weight": nullable_float(recurrent_advantage.get("rank_weight")),
+                "recurrent_advantage_calibration_criterion": str(
+                    recurrent_advantage.get("calibration_criterion", "")
+                ),
+                "recurrent_advantage_calibration_guard_pass": bool(
+                    (recurrent_advantage.get("calibration_row") or {}).get("static_margin_guard_pass", False)
+                )
+                if isinstance(recurrent_advantage.get("calibration_row"), dict)
+                else False,
+                "recurrent_advantage_candidate_enabled": bool(
+                    recurrent_advantage.get("candidate_enabled", False)
+                ),
+                "recurrent_advantage_validation_objective": nullable_float(
+                    recurrent_advantage.get("validation_objective")
+                ),
+                "recurrent_advantage_loss_final": final_history_loss(recurrent_advantage.get("history")),
+                "recurrent_advantage_best_action_accuracy_final": final_history_value(
+                    recurrent_advantage.get("history"),
+                    key="best_action_accuracy",
+                ),
             }
         )
         metrics_path = run_dir / "metrics_final.csv"
@@ -218,6 +442,9 @@ def collect_runs(suite_root: Path) -> tuple[list[dict[str, object]], list[dict[s
 
 def summarize_group(group: pd.DataFrame) -> dict[str, object]:
     deployable_margin = group["deployable_margin"].astype(float).to_numpy()
+    deployable_margin_selected = group.get("deployable_margin_selected", group["deployable_margin"]).astype(
+        float
+    ).to_numpy()
     teacher_margin = group["teacher_margin"].astype(float).to_numpy()
     n = int(len(group))
     wins = int(np.sum(deployable_margin > 0.0))
@@ -230,6 +457,7 @@ def summarize_group(group: pd.DataFrame) -> dict[str, object]:
         "deployable_margin_mean": float(np.nanmean(deployable_margin)),
         "deployable_margin_std": float(np.nanstd(deployable_margin, ddof=1)) if n > 1 else 0.0,
         "deployable_margin_median": float(np.nanmedian(deployable_margin)),
+        "deployable_margin_selected_mean": float(np.nanmean(deployable_margin_selected)),
         "teacher_wins": teacher_wins,
         "teacher_win_rate": teacher_wins / n if n else np.nan,
         "teacher_margin_mean": float(np.nanmean(teacher_margin)),
@@ -370,12 +598,16 @@ def nullable_float(value: object) -> float | None:
 
 
 def final_history_loss(history: object) -> float | None:
+    return final_history_value(history, key="loss")
+
+
+def final_history_value(history: object, *, key: str) -> float | None:
     if not isinstance(history, dict):
         return None
-    losses = history.get("loss")
-    if not isinstance(losses, list) or not losses:
+    values = history.get(str(key))
+    if not isinstance(values, list) or not values:
         return None
-    return float(losses[-1])
+    return float(values[-1])
 
 
 def exact_sign_test_two_sided(wins: int, n: int) -> float:

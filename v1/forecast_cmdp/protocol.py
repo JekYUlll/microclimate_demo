@@ -20,6 +20,11 @@ from v2.sensor_spec import SensorSpecV2  # noqa: E402
 
 
 SPLIT_NAMES = ("oracle_pretrain", "rl_train", "validation", "final_test")
+TRANSPORT_SELECTION_COLUMNS = (
+    "snow_mass_flux_kg_m2_s",
+    "snow_particle_mean_diameter_mm",
+    "snow_particle_mean_velocity_ms",
+)
 
 
 @dataclass(frozen=True)
@@ -56,7 +61,7 @@ def choose_non_overlapping_starts(
     event_column: str,
     seed: int,
 ) -> SelectedStarts:
-    if str(selection) == "event_rich":
+    if str(selection) in {"event_rich", "event_transport_rich"}:
         starts, diagnostics = event_rich_non_overlapping_starts(
             truth,
             bounds=bounds,
@@ -65,6 +70,7 @@ def choose_non_overlapping_starts(
             count=int(count),
             stride=int(stride),
             event_column=str(event_column),
+            include_transport_variability=str(selection) == "event_transport_rich",
         )
         return SelectedStarts(starts=starts, diagnostics=diagnostics)
     starts = random_non_overlapping_starts(
@@ -112,6 +118,8 @@ def event_rich_non_overlapping_starts(
     count: int,
     stride: int,
     event_column: str,
+    include_transport_variability: bool = False,
+    transport_weight: float = 0.20,
 ) -> tuple[tuple[int, ...], dict[str, object]]:
     start, end = (int(bounds[0]), int(bounds[1]))
     max_start = end - int(window_steps) - int(horizon) - 1
@@ -128,6 +136,21 @@ def event_rich_non_overlapping_starts(
         [float(np.mean(flags[item : item + int(window_steps)])) for item in candidate_starts],
         dtype=float,
     )
+    transport_columns = tuple(column for column in TRANSPORT_SELECTION_COLUMNS if column in truth.columns)
+    transport_table = transport_variability_scores(
+        truth,
+        candidate_starts=tuple(candidate_starts),
+        window_steps=int(window_steps),
+        event_column=str(event_column),
+        columns=transport_columns,
+    )
+    if include_transport_variability and transport_columns:
+        variability_score = normalized_variability_score(transport_table, transport_columns)
+        ranking_scores = rates + float(transport_weight) * variability_score
+        selection_name = "maximum_total_event_transport_rate_non_overlapping_within_declared_partition"
+    else:
+        ranking_scores = rates
+        selection_name = "maximum_total_event_rate_non_overlapping_within_declared_partition"
 
     previous = [bisect.bisect_right(candidate_starts, value - span) - 1 for value in candidate_starts]
     n = len(candidate_starts)
@@ -138,7 +161,7 @@ def event_rich_non_overlapping_starts(
     for idx in range(1, n + 1):
         for number in range(1, wanted + 1):
             skip = scores[idx - 1, number]
-            take = rates[idx - 1] + scores[previous[idx - 1] + 1, number - 1]
+            take = ranking_scores[idx - 1] + scores[previous[idx - 1] + 1, number - 1]
             if take > skip:
                 scores[idx, number] = take
                 selected[idx, number] = True
@@ -158,14 +181,71 @@ def event_rich_non_overlapping_starts(
             idx -= 1
     chosen = sorted(chosen)
     selected_rates = [float(np.mean(flags[value : value + int(window_steps)])) for value in chosen]
-    return tuple(chosen), {
-        "selection": "maximum_total_event_rate_non_overlapping_within_declared_partition",
+    chosen_positions = [candidate_starts.index(value) for value in chosen]
+    diagnostics = {
+        "selection": selection_name,
         "event_column": str(event_column),
         "stride": int(stride),
         "candidate_count": int(n),
         "selected_event_rates": selected_rates,
         "selected_event_rate_mean": float(np.mean(selected_rates)),
     }
+    if include_transport_variability and transport_columns:
+        diagnostics.update(
+            {
+                "transport_weight": float(transport_weight),
+                "transport_columns": list(transport_columns),
+                "selected_ranking_scores": [float(ranking_scores[pos]) for pos in chosen_positions],
+                "selected_ranking_score_mean": float(np.mean([ranking_scores[pos] for pos in chosen_positions])),
+            }
+        )
+        for column in transport_columns:
+            values = [float(transport_table[column][pos]) for pos in chosen_positions]
+            diagnostics[f"selected_{column}_std_mean"] = float(np.mean(values))
+            diagnostics[f"selected_{column}_std_values"] = values
+    return tuple(chosen), diagnostics
+
+
+def transport_variability_scores(
+    truth: pd.DataFrame,
+    *,
+    candidate_starts: tuple[int, ...],
+    window_steps: int,
+    event_column: str,
+    columns: tuple[str, ...],
+) -> dict[str, np.ndarray]:
+    table: dict[str, list[float]] = {column: [] for column in columns}
+    flags = truth[event_column].astype(bool).to_numpy() if event_column in truth.columns else np.zeros(len(truth), dtype=bool)
+    for start in candidate_starts:
+        stop = int(start) + int(window_steps)
+        event_slice = flags[int(start) : stop]
+        for column in columns:
+            values = truth[column].to_numpy(dtype=float)[int(start) : stop]
+            if bool(np.any(event_slice)):
+                values = values[event_slice]
+            values = values[np.isfinite(values)]
+            table[column].append(float(np.std(values)) if values.size else 0.0)
+    return {column: np.asarray(values, dtype=float) for column, values in table.items()}
+
+
+def normalized_variability_score(table: dict[str, np.ndarray], columns: tuple[str, ...]) -> np.ndarray:
+    if not columns:
+        return np.zeros(0, dtype=float)
+    normalized: list[np.ndarray] = []
+    for column in columns:
+        values = np.asarray(table[column], dtype=float)
+        if values.size == 0:
+            continue
+        scale = float(np.nanstd(values))
+        if not np.isfinite(scale) or scale <= 1.0e-12:
+            normalized.append(np.zeros_like(values, dtype=float))
+        else:
+            mean = float(np.nanmean(values))
+            normalized.append(np.nan_to_num((values - mean) / scale, nan=0.0, posinf=0.0, neginf=0.0))
+    if not normalized:
+        first = np.asarray(table[columns[0]], dtype=float)
+        return np.zeros_like(first, dtype=float)
+    return np.mean(np.vstack(normalized), axis=0)
 
 
 def evaluate_policy_over_starts(
@@ -362,11 +442,18 @@ def task_focus_metrics(
     event_mask = np.asarray(result.event_flags, dtype=bool)
     event_mean = float(np.mean(err[event_mask])) if err.size and np.any(event_mask) else float("nan")
     selected = event_mean if bool(event_only) else all_mean
-    return {
+    out = {
         "task_error_mean": float(selected),
         "task_error_event_mean": event_mean,
         "task_error_all_mean": all_mean,
     }
+    for local_idx, name in enumerate(name for name in columns if name in index):
+        values = err[:, local_idx]
+        out[f"task_error_{name}_all_mean"] = float(np.mean(values)) if values.size else float("nan")
+        out[f"task_error_{name}_event_mean"] = (
+            float(np.mean(values[event_mask])) if values.size and np.any(event_mask) else float("nan")
+        )
+    return out
 
 
 def save_rollout(path: str | Path, result: RolloutResult, *, sensor_ids: tuple[str, ...], state_columns: tuple[str, ...]) -> None:

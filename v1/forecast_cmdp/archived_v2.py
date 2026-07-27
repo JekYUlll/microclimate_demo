@@ -14,6 +14,8 @@ ensure_archive_src()
 from v2.env import WarmupEnvConfig, WarmupSchedulingEnv  # noqa: E402
 from v2.oracle import LinearFrozenForecastOracle  # noqa: E402
 from v2.power_projector import PowerConstraintsV2  # noqa: E402
+from v2.policies import V2Policy  # noqa: E402
+from v2.rollout import RolloutResult  # noqa: E402
 from v2.sensor_spec import SensorSpecV2, load_sensor_specs  # noqa: E402
 from v2.tcn_oracle import TCNFrozenForecastOracle  # noqa: E402
 
@@ -113,6 +115,7 @@ def make_env_config(
     lambda_energy_deficit: float,
     soc_soft_penalty_buffer: float,
     lambda_soc_soft_penalty: float,
+    common_random_numbers: bool = False,
 ) -> WarmupEnvConfig:
     return WarmupEnvConfig(
         state_columns=state_columns,
@@ -134,6 +137,7 @@ def make_env_config(
         lambda_energy_deficit=float(lambda_energy_deficit),
         soc_soft_penalty_buffer=float(soc_soft_penalty_buffer),
         lambda_soc_soft_penalty=float(lambda_soc_soft_penalty),
+        common_random_numbers=bool(common_random_numbers),
     )
 
 
@@ -151,6 +155,104 @@ def build_warmup_env(
         constraints=constraints,
         cfg=cfg,
         oracle=oracle,
+    )
+
+
+def continue_policy_rollout(
+    env: WarmupSchedulingEnv,
+    policy: V2Policy,
+    *,
+    steps: int,
+) -> RolloutResult:
+    """Roll a policy from the current environment state without resetting it."""
+
+    policy.reset()
+    observations: list[np.ndarray] = []
+    masks: list[np.ndarray] = []
+    truth: list[np.ndarray] = []
+    rewards: list[float] = []
+    score_rows: list[np.ndarray] = []
+    powers: list[float] = []
+    peaks: list[float] = []
+    selected_masks: list[np.ndarray] = []
+    mode_ids: list[np.ndarray] = []
+    event_flags: list[float] = []
+    oracle_losses: list[float] = []
+    step_indices: list[int] = []
+    warmup_abort_deltas: list[int] = []
+    energy_guard_dropped: list[int] = []
+    soc: list[float] = []
+    abort_count_before = int(
+        sum(runtime.warmup_abort_count for runtime in env.runtimes.values())
+    )
+
+    for _ in range(int(steps)):
+        step_idx = int(env.current_idx)
+        truth_at_step = np.array(
+            env.truth_values[env.current_idx],
+            dtype=float,
+            copy=True,
+        )
+        act_mask = getattr(policy, "act_mask", None)
+        desired = act_mask(env) if callable(act_mask) else None
+        if desired is not None:
+            desired_mask = np.asarray(desired, dtype=bool).reshape(-1)
+            scores = np.where(desired_mask, 1.0, -1.0)
+            _, reward, done, info = env.step_mask(desired_mask)
+        else:
+            scores = policy.act_scores(env)
+            _, reward, done, info = env.step_scores(scores)
+        observations.append(np.array(env.last_observation, dtype=float, copy=True))
+        masks.append(np.array(env.observed_mask, dtype=float, copy=True))
+        truth.append(truth_at_step)
+        rewards.append(float(reward))
+        score_rows.append(np.asarray(scores, dtype=float).reshape(-1))
+        powers.append(float(info["power"]))
+        peaks.append(float(info["peak_power"]))
+        selected_masks.append(np.asarray(info["selected_mask"], dtype=int))
+        mode_after = info.get("mode_ids_after_step", {})
+        mode_ids.append(
+            np.asarray(
+                [
+                    mode_after.get(
+                        sensor_id,
+                        info["sensor_status"][sensor_id]["mode_id"],
+                    )
+                    for sensor_id in env.sensor_ids
+                ],
+                dtype=int,
+            )
+        )
+        event_flags.append(float(info["event"]))
+        oracle_losses.append(float(info["oracle_loss"]))
+        step_indices.append(step_idx)
+        warmup_abort_deltas.append(int(info.get("warmup_abort_delta", 0)))
+        energy_guard_dropped.append(int(info.get("energy_guard_dropped", 0)))
+        soc.append(float(info.get("soc", float("nan"))))
+        if done:
+            break
+
+    abort_count_after = int(
+        sum(runtime.warmup_abort_count for runtime in env.runtimes.values())
+    )
+    return RolloutResult(
+        policy_name=policy.name,
+        observations=np.asarray(observations, dtype=float),
+        masks=np.asarray(masks, dtype=float),
+        truth=np.asarray(truth, dtype=float),
+        rewards=np.asarray(rewards, dtype=float),
+        scores=np.asarray(score_rows, dtype=float),
+        powers=np.asarray(powers, dtype=float),
+        peaks=np.asarray(peaks, dtype=float),
+        selected_masks=np.asarray(selected_masks, dtype=int),
+        mode_ids=np.asarray(mode_ids, dtype=int),
+        event_flags=np.asarray(event_flags, dtype=float),
+        oracle_losses=np.asarray(oracle_losses, dtype=float),
+        step_indices=np.asarray(step_indices, dtype=int),
+        warmup_abort_count=max(0, abort_count_after - abort_count_before),
+        warmup_abort_deltas=np.asarray(warmup_abort_deltas, dtype=int),
+        energy_guard_dropped=np.asarray(energy_guard_dropped, dtype=int),
+        soc=np.asarray(soc, dtype=float),
     )
 
 

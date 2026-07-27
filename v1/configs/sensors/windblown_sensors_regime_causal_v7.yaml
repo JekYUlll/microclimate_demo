@@ -1,0 +1,120 @@
+sensors:
+  # v7 regime-causal scenario.
+  # Design intent:
+  # - no single static mask should cover onset, active transport, and
+  #   decay/thermal phases;
+  # - core+SPC+FC4 remains instantaneously feasible but is energy-limited and
+  #   incomplete for onset/decay context;
+  # - lightweight context stacks are cheap enough to be useful dynamic
+  #   alternatives, not cosmetic sensors.
+  - sensor_id: met_station_core
+    variables:
+      - wind_speed_ms
+      - wind_direction_deg
+      - air_temperature_c
+      - relative_humidity
+      - air_pressure_pa
+    refresh_interval: 1
+    power_cost: 0.20
+    startup_peak_power: 0.24
+    warmup_steps: 0
+    noise_std:
+      wind_speed_ms: 0.36
+      wind_direction_deg: 3.20
+      air_temperature_c: 0.28
+      relative_humidity: 1.20
+      air_pressure_pa: 18.0
+
+  - sensor_id: radiometer_basic
+    variables:
+      - solar_radiation_wm2
+    refresh_interval: 1
+    power_cost: 0.10
+    startup_peak_power: 0.13
+    warmup_steps: 0
+    noise_std:
+      solar_radiation_wm2: 7.0
+
+  - sensor_id: surface_temp_ir
+    variables:
+      - snow_surface_temperature_c
+    refresh_interval: 1
+    power_cost: 0.13
+    startup_peak_power: 0.16
+    warmup_steps: 1
+    noise_std:
+      snow_surface_temperature_c: 0.18
+
+  - sensor_id: ultrasonic_anemometer_hd
+    variables:
+      - wind_speed_ms
+      - wind_direction_deg
+    refresh_interval: 1
+    power_cost: 0.16
+    startup_peak_power: 0.21
+    warmup_steps: 0
+    noise_std:
+      wind_speed_ms: 0.045
+      wind_direction_deg: 0.45
+
+  - sensor_id: shielded_thermo_hygro
+    variables:
+      - air_temperature_c
+      - relative_humidity
+    refresh_interval: 1
+    power_cost: 0.14
+    startup_peak_power: 0.18
+    warmup_steps: 0
+    noise_std:
+      air_temperature_c: 0.06
+      relative_humidity: 0.30
+
+  - sensor_id: snow_particle_counter
+    variables:
+      - snow_particle_mean_diameter_mm
+      - snow_particle_mean_velocity_ms
+    refresh_interval: 2
+    power_cost: 0.78
+    startup_peak_power: 1.02
+    warmup_steps: 2
+    noise_std:
+      snow_particle_mean_diameter_mm: 0.055
+      snow_particle_mean_velocity_ms: 0.18
+    event_noise_std:
+      snow_particle_mean_diameter_mm: 0.08
+      snow_particle_mean_velocity_ms: 0.28
+    event_observation_probability:
+      snow_particle_mean_diameter_mm: 0.82
+      snow_particle_mean_velocity_ms: 0.82
+
+  - sensor_id: laser_disdrometer
+    variables:
+      - snow_particle_mean_diameter_mm
+      - snow_particle_mean_velocity_ms
+    refresh_interval: 2
+    power_cost: 1.18
+    startup_peak_power: 1.50
+    warmup_steps: 3
+    noise_std:
+      snow_particle_mean_diameter_mm: 0.025
+      snow_particle_mean_velocity_ms: 0.06
+    event_noise_std:
+      snow_particle_mean_diameter_mm: 0.12
+      snow_particle_mean_velocity_ms: 0.35
+    event_observation_probability:
+      snow_particle_mean_diameter_mm: 0.70
+      snow_particle_mean_velocity_ms: 0.70
+
+  - sensor_id: fc4_flux
+    variables:
+      - snow_mass_flux_kg_m2_s
+    refresh_interval: 1
+    power_cost: 0.78
+    startup_peak_power: 1.02
+    warmup_steps: 1
+    noise_std:
+      snow_mass_flux_kg_m2_s: 2.0e-05
+    event_noise_std:
+      snow_mass_flux_kg_m2_s: 8.0e-05
+    event_observation_probability:
+      snow_mass_flux_kg_m2_s: 0.50

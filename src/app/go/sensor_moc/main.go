@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -22,7 +23,10 @@ type WeatherData struct {
 }
 
 func main() {
-	dsn := "horeb:ZZYzzy4771430///@tcp(124.220.77.63)/antarctic_data?charset=utf8mb4&parseTime=True&loc=Local"
+	dsn := os.Getenv("ANTARCTIC_DB_DSN")
+	if dsn == "" {
+		log.Fatal("ANTARCTIC_DB_DSN is required")
+	}
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		log.Fatalf("数据库连接失败: %v", err)

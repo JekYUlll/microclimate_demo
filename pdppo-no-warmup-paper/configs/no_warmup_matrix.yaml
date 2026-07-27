@@ -1,0 +1,48 @@
+# Experiment matrix for the isolated no-warmup PD-PPO paper track.
+# This file is documentation/configuration for wrapper scripts. Experiments run
+# on the server, not locally.
+
+framework_root: "~/_code/microclimate_demo/rl_sensor_scheduling_framework"
+python: "/home/zhangzhuyu/.conda/envs/darts/bin/python"
+sensor_config: "configs/sensors/windblown_sensors_balanced_no_warmup.yaml"
+
+base_no_warmup:
+  status: "already_running_or_partial"
+  out_dir: "reports/v31_split_protocol_no_warmup"
+  budgets: [1.65, 1.70, 1.75]
+  seeds: [41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
+  total_timesteps: 100000
+  lambda_warmup_abort: 0.0
+  expected_claim:
+    - "static advantage candidate"
+    - "dynamic duty likely invalid without hard guard"
+
+hard_duty_reduced:
+  status: "running_or_partial"
+  out_dir: "reports/v31_split_protocol_no_warmup_hguard_reduced"
+  budget: 1.70
+  seeds: [41, 42, 43]
+  total_timesteps: 40000
+  lambda_warmup_abort: 0.0
+  lambda_duty_balance: 0.8
+  duty_balance_low: 0.12
+  duty_balance_high: 0.85
+  duty_score_feedback: 2.5
+  duty_hard_low: 0.12
+  duty_hard_high: 0.85
+  duty_hard_score: 12
+  awbc_coef: 0.02
+  prior_kl_coef: 0.05
+  candidate_prior_scale: 0.5
+  ent_coef: 0.003
+  expected_claim:
+    - "dynamic duty validity"
+    - "must be checked against selected/static and dynamic baselines"
+
+acceptance:
+  static_win_rate_min: 0.6
+  best_original_fair_win_rate_min_for_dominance_claim: 0.6
+  best_constrained_win_rate_min_for_operational_claim: 0.6
+  min_mid_duty_sensors: 5
+  max_always_on_sensors: 1
+  max_always_off_sensors: 1

@@ -24,6 +24,7 @@ if str(RLSF_SRC) not in sys.path:
     sys.path.insert(0, str(RLSF_SRC))
 
 TRUTH_BUILDER = RLSF_ROOT / "scripts" / "20_build_public_weather_truth.py"
+V1_REGIME_TRUTH_BUILDER = ROOT / "v1" / "scripts" / "build_regime_causal_truth.py"
 HELPERS_PATH = RLSF_ROOT / "scripts" / "23_v2_train_ppo.py"
 SPLIT_PATH = RLSF_ROOT / "scripts" / "61_energy_account_split_protocol_run.py"
 
@@ -44,11 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
 
+    parser.add_argument("--truth-builder", choices=["archived", "regime_causal_v7"], default="archived")
     parser.add_argument("--antaws-root", default="data/AntAWS/3_hourly")
     parser.add_argument("--stations", nargs="+", default=["Panda100", "Panda200", "Taishan"])
     parser.add_argument("--sensor-cfg", default="configs/sensors/windblown_sensors_physical_event_v4.yaml")
     parser.add_argument("--truth-steps", type=int, default=90000)
     parser.add_argument("--freq-s", type=int, default=10800)
+    parser.add_argument("--phase-keep-fraction", type=float, default=0.15)
     parser.add_argument("--split-ratios", nargs=4, type=float, default=[0.30, 0.45, 0.125, 0.125])
     parser.add_argument("--selection-stride", type=int, default=64)
     parser.add_argument("--curriculum-context-steps", type=int, default=1024)
@@ -73,6 +76,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--event-microstructure-alpha", type=float, default=0.18)
     parser.add_argument("--event-microstructure-diameter-scale", type=float, default=0.05)
     parser.add_argument("--event-microstructure-velocity-scale", type=float, default=1.2)
+    parser.add_argument("--event-particle-microstructure-correlation", type=float, default=0.55)
+    parser.add_argument("--v7-onset-fraction", type=float, default=0.20)
+    parser.add_argument("--v7-decay-steps", type=int, default=8)
+    parser.add_argument("--v7-flux-scale", type=float, default=1.45e-4)
+    parser.add_argument("--v7-background-flux", type=float, default=1.0e-7)
+    parser.add_argument("--v7-noise-scale", type=float, default=0.05)
 
     parser.add_argument("--budget", type=float, default=1.20)
     parser.add_argument("--startup-peak-budget", type=float, default=1.60)
@@ -155,6 +164,67 @@ def prepare_seed(args: argparse.Namespace, *, helpers: ModuleType, split: Module
 
 
 def build_truth_command(args: argparse.Namespace, *, truth_path: Path, seed: int) -> list[str]:
+    if str(args.truth_builder) == "regime_causal_v7":
+        return [
+            sys.executable,
+            str(V1_REGIME_TRUTH_BUILDER),
+            "--antaws-root",
+            resolve_antaws_root(str(args.antaws_root)),
+            "--stations",
+            *[str(station) for station in args.stations],
+            "--steps",
+            str(int(args.truth_steps)),
+            "--freq-s",
+            str(int(args.freq_s)),
+            "--seed",
+            str(int(seed)),
+            "--phase-keep-fraction",
+            str(float(args.phase_keep_fraction)),
+            "--event-coverage",
+            str(float(args.event_coverage)),
+            "--event-model",
+            str(args.event_model),
+            "--min-duration",
+            str(int(args.min_duration)),
+            "--max-duration",
+            str(int(args.max_duration)),
+            "--min-gap",
+            str(int(args.min_gap)),
+            "--lead-steps",
+            str(int(args.lead_steps)),
+            "--wind-margin-ms",
+            str(float(args.wind_margin_ms)),
+            "--cred-hysteresis-on",
+            str(float(args.cred_hysteresis_on)),
+            "--cred-hysteresis-off",
+            str(float(args.cred_hysteresis_off)),
+            "--flux-wind-exponent",
+            str(float(args.flux_wind_exponent)),
+            "--event-microstructure-sigma",
+            str(float(args.event_microstructure_sigma)),
+            "--event-microstructure-alpha",
+            str(float(args.event_microstructure_alpha)),
+            "--event-microstructure-diameter-scale",
+            str(float(args.event_microstructure_diameter_scale)),
+            "--event-microstructure-velocity-scale",
+            str(float(args.event_microstructure_velocity_scale)),
+            "--particle-correlation",
+            str(float(args.event_particle_microstructure_correlation)),
+            "--v7-onset-fraction",
+            str(float(args.v7_onset_fraction)),
+            "--v7-decay-steps",
+            str(int(args.v7_decay_steps)),
+            "--v7-flux-scale",
+            str(float(args.v7_flux_scale)),
+            "--v7-background-flux",
+            str(float(args.v7_background_flux)),
+            "--v7-noise-scale",
+            str(float(args.v7_noise_scale)),
+            "--out",
+            str(truth_path),
+            "--report-dir",
+            str(truth_path.parent / "dataset_validation"),
+        ]
     return [
         sys.executable,
         str(TRUTH_BUILDER),
@@ -196,6 +266,8 @@ def build_truth_command(args: argparse.Namespace, *, truth_path: Path, seed: int
         str(float(args.event_microstructure_diameter_scale)),
         "--event-microstructure-velocity-scale",
         str(float(args.event_microstructure_velocity_scale)),
+        "--event-particle-microstructure-correlation",
+        str(float(args.event_particle_microstructure_correlation)),
         "--out",
         str(truth_path),
         "--report-dir",
@@ -314,6 +386,7 @@ def write_manifest(
             "reserve_energy": float(args.reserve_energy),
         },
         "truth_event_design": {
+            "truth_builder": str(args.truth_builder),
             "blowing_snow_event_coverage": float(args.event_coverage),
             "blowing_snow_event_model": str(args.event_model),
             "blowing_snow_min_duration_steps": int(args.min_duration),
@@ -328,6 +401,12 @@ def write_manifest(
             "event_microstructure_alpha": float(args.event_microstructure_alpha),
             "event_microstructure_diameter_scale": float(args.event_microstructure_diameter_scale),
             "event_microstructure_velocity_scale": float(args.event_microstructure_velocity_scale),
+            "event_particle_microstructure_correlation": float(args.event_particle_microstructure_correlation),
+            "v7_onset_fraction": float(args.v7_onset_fraction),
+            "v7_decay_steps": int(args.v7_decay_steps),
+            "v7_flux_scale": float(args.v7_flux_scale),
+            "v7_background_flux": float(args.v7_background_flux),
+            "v7_noise_scale": float(args.v7_noise_scale),
         },
         "oracle": {
             "type": str(args.oracle_type),

@@ -1,0 +1,304 @@
+# v1 行动计划更新（Turn 88）
+
+本文档整合 Turn 88 实验报告的全部新结果，完整替换 Turn 87 行动计划中的 Branch F/G/C 结构，并给出 mean-risk self-rollout planner 的具体实现规格。
+
+---
+
+## 一、当前状态精确摘要
+
+### 1.1 Proxy-MPC 结果（最新，最先进的 deployable 接口）
+
+Turn 88 报告的 proxy-MPC 是迄今为止在平均 margin 上最接近可用的 deployable 接口：
+
+| seed | best mean margin | q25 | minimum | negative starts | 是否被选中 |
+|---:|---:|---:|---:|---:|---|
+| 41 | −0.001605 | −0.038449 | −0.054134 | 7 | 否 |
+| 42 | +0.005049 | −0.001126 | −0.032500 | 3 | 否 |
+| 44 | +0.008540 | −0.003628 | −0.044961 | 4 | 否 |
+
+Teacher（对照）：3/3 seeds，mean margin +0.113506。
+
+**关键进展：** 与 utility planner 相比，proxy-MPC 将 seed42/44 的最佳 mean margin 从负值推到正值，seed41 也接近零。这是第一条在多数 seed 上获得正 mean validation margin 的纯因果多步 planner。
+
+**剩余差距：** 三个 seed 的 q25、minimum 和 negative starts 均不满足风险门控（mean ≥ 0.001，min ≥ −0.01，negative starts ≤ 1，q25 ≥ 0）。问题已从"平均性能"收敛为"窗口级 downside risk"。
+
+### 1.2 根因诊断（最终版，Turn 88 确认）
+
+当前瓶颈不是：
+- static baseline 选错（validation-selected feasible static，协议已固定）
+- teacher 没有动态价值（teacher 3/3 seeds，60/60 windows 均优于 static）
+- event 数量不足（v6/event-transport 场景已通过 static/teacher 校准门控）
+- 训练样本数量太少（cost-DAgger 将 rows 扩至 3072，结果不变）
+- 单纯 teacher-state covariate shift（oracle event context 仍 1/3）
+- calibration horizon 不一致（full-rollout 256 steps 已修复，结果不变）
+
+当前瓶颈是：
+
+**瓶颈 1：学习目标不能准确估计 full-window relative margin。** 当前 proxy-MPC 优化的是 one-step proxy score（event utility + freshness + power/switch penalty），而 claim 需要 full-window static-anchor margin 和 tail risk。
+
+**瓶颈 2：planner 的平均行为接近有效，但少数窗口损失较大。** seed41 negative starts = 7，seed42 = 3，seed44 = 4，说明存在系统性的窗口级 downside risk，而非随机噪声。
+
+**瓶颈 3：现有模型没有显式学习 lower quantile、negative-start probability 或 CVaR。** 所有已探索接口（包括 proxy-MPC）均使用手工 scalar utility 或 one-step cost 作为规划目标，没有从 paired rollout outcomes 学到真实风险分布。
+
+### 1.3 硬停止条件评估
+
+Turn 87 硬停止条件：v6 场景下连续 3 个新 deployable 接口均在 seeds 41/42/44 gate 失败（0/3 或 1/3）。
+
+Turn 88 报告中，proxy-MPC 是 v6 场景下的第 14+ 个接口，结果为 0/3（未通过风险门控）。但 Turn 88 报告**未触发硬停止**，而是提出了一个架构层面的新方向（mean-risk self-rollout planner），而非又一个参数变体。
+
+**判断：** 硬停止条件的精神是"停止局部参数搜索"，而非"停止所有新接口开发"。proxy-MPC 已经证明平均 margin 可以为正，剩余问题是 tail risk。mean-risk self-rollout planner 是对学习目标的根本性改变，不属于"局部参数搜索"范畴。因此，**不触发硬停止，进入 Branch H（mean-risk self-rollout planner）**。
+
+---
+
+## 二、Branch H：Mean-Risk Self-Rollout Planner（新主路线）
+
+### 2.1 核心思路
+
+当前 proxy-MPC 的根本问题是：规划目标（手工 proxy score）与 claim 目标（full-window static-anchor margin 的 q25/CVaR）之间存在系统性错配。
+
+Branch H 的核心思路是：**直接从 paired full-window self-rollout 中学习 full-window relative outcome distribution**，然后用 learned mean-risk model 在 receding horizon 中选择候选 sequence，风险不通过时执行 static anchor。
+
+这与 proxy-MPC 的区别在于：
+- proxy-MPC：手工 proxy score → 多步 beam search → 选最高 proxy score 的 sequence
+- Branch H：paired rollout outcomes → 学习 margin/CVaR 分布 → 选 q25 ≥ 0 且 negative-start probability ≤ threshold 的 sequence
+
+### 2.2 数据收集：Paired Full-Window Self-Rollout
+
+**目的：** 在 train split 上，对每个候选 mask sequence 和 static anchor 做 paired full-window rollout，收集 full-window relative margin 的分布数据。
+
+**具体步骤：**
+
+1. **Static anchor rollout（已有）：** 从 train split 的每个起点，执行 validation-selected static mask 的 full-window rollout（256 steps），记录 window-level objective。
+
+2. **Candidate planner rollout（新增）：** 从相同起点，执行当前 proxy-MPC planner 的 full-window rollout，记录 window-level objective。同时执行 N_candidates 个随机扰动变体（在 teacher-supported feasible masks 中随机替换 1–3 个时间步的 mask），收集 candidate distribution。
+
+3. **Paired margin 计算：** 对每个起点，计算 `margin_i = objective_candidate_i − objective_static`。收集 (state_context, mask_sequence_features, margin) 三元组。
+
+4. **训练数据格式：**
+   - 输入：`(s_t, forecast_features_t, sequence_summary_features)` — 当前状态、learned event/continuous forecast、候选 sequence 的摘要特征（duty rates、switch count、freshness profile）
+   - 输出：`(mean_margin, q25_margin, negative_start_prob, feasibility_flag)`
+
+**关键约束：**
+- 训练数据必须包含当前策略自身 rollout（不只是 teacher 或 static 分布）
+- 候选 sequence 必须来自 teacher-supported feasible masks（与 proxy-MPC 一致）
+- 所有 rollout 使用 train split 数据，不接触 validation 或 final split
+
+**数据量估计：**
+- Train split：约 128 steps × 12 rollouts = 1536 steps
+- 每个起点 N_candidates = 16 个候选（与 proxy-MPC beam width 一致）
+- 每个候选 full-window rollout = 256 steps
+- 总 rollout 数：12 × 16 = 192 个 full-window rollouts per seed
+- 总 (state, margin) 样本：约 192 × 256 = 49152 步级样本，或 192 个窗口级样本
+
+### 2.3 Mean-Risk Model 架构
+
+**模型类型：** 轻量级多输出回归模型，输入为 sequence-level 特征，输出为 margin 分布的多个统计量。
+
+**输入特征（sequence-level，约 20 维）：**
+- Forecast features（8 维）：learned event probability 均值/最大值（h=1,2,4,8），learned continuous forecast 的 flux/diameter/velocity 变化幅度
+- Sequence summary features（8 维）：候选 sequence 的 fc4/SPC/context duty rates，switch count，max simultaneous switches，dwell distribution
+- State context features（4 维）：当前 SOC，freshness（fc4/SPC），time-in-window
+
+**输出（4 维）：**
+- `mean_margin`：期望 full-window static-anchor margin
+- `q25_margin`：25th percentile margin（downside risk 的主要指标）
+- `neg_start_prob`：negative-start probability（proportion of windows with margin < 0）
+- `feasibility_score`：constraint/warmup feasibility（0–1）
+
+**模型选择：**
+- 首选：gradient boosting（XGBoost/LightGBM），深度 ≤ 4，树数 ≤ 200
+- 备选：2 层 MLP（hidden 64），若 gradient boosting 过拟合
+- 不使用 GRU/LSTM（序列特征已被 sequence summary features 压缩）
+
+**训练目标：** 对每个输出分别训练，使用 pinball loss（quantile regression）：
+- `mean_margin`：MSE loss
+- `q25_margin`：pinball loss at τ = 0.25
+- `neg_start_prob`：binary cross-entropy（margin < 0 为正类）
+- `feasibility_score`：binary cross-entropy（constraint/warmup 违反为负类）
+
+### 2.4 Receding-Horizon Candidate Selection
+
+**规划流程（每个决策步 t）：**
+
+1. **候选生成：** 在 teacher-supported feasible masks 中，用 beam search（beam width = 8，depth = 3）生成 N_candidates = 16 个候选 sequence。
+
+2. **Mean-risk 评分：** 对每个候选 sequence，提取 sequence-level 特征，输入 mean-risk model，得到 `(mean_margin, q25_margin, neg_start_prob, feasibility_score)`。
+
+3. **风险门控：**
+   - 若存在满足以下条件的候选：`q25_margin ≥ 0` 且 `neg_start_prob ≤ 0.25` 且 `feasibility_score ≥ 0.8`
+   - 则选择 `mean_margin` 最高的满足条件候选，执行其第一步 mask
+   - 否则执行 static anchor mask（fallback）
+
+4. **Receding horizon：** 每步重新规划（不固定整个 sequence），允许 planner 根据实时状态更新候选。
+
+**与 proxy-MPC 的关键区别：**
+- proxy-MPC：beam search 优化手工 proxy score（event utility + freshness + power/switch penalty）
+- Branch H：beam search 生成候选，mean-risk model 评分，风险门控选择
+
+### 2.5 训练协议
+
+**阶段 1：Static rollout 收集（约 30 分钟/seed）**
+- 从 train split 的 12 个起点，执行 static anchor full-window rollout（256 steps）
+- 记录 window-level objective 和 step-level state
+
+**阶段 2：Candidate rollout 收集（约 2–4 小时/seed）**
+- 从相同 12 个起点，执行 proxy-MPC planner 的 full-window rollout（256 steps）
+- 同时执行 15 个随机扰动变体（在 teacher-supported feasible masks 中随机替换 1–3 步）
+- 记录每个候选的 window-level objective 和 step-level state
+
+**阶段 3：Mean-risk model 训练（约 5 分钟/seed）**
+- 从 paired rollout 数据中提取 (state, sequence_features, margin) 三元组
+- 训练 gradient boosting 模型（4 个输出，分别训练）
+- 验证：在 train split 的 held-out 起点上检查 q25 calibration（实际 q25 是否接近预测 q25）
+
+**阶段 4：Receding-horizon deployment（约 1 小时/seed）**
+- 在 validation split 上执行 receding-horizon candidate selection
+- 记录 mean margin、q25、negative starts
+- 若满足风险门控（mean ≥ 0.001，q25 ≥ 0，negative starts ≤ 1），进入 final test
+
+**总计算成本：** 约 3–6 小时/seed（主要是 candidate rollout 收集），seeds 41/42/44 共约 9–18 小时。
+
+### 2.6 成功标准与决策门
+
+**Seeds 41/42/44 smoke gate（必须通过才能扩展）：**
+- ≥ 2/3 seeds 通过风险门控（mean ≥ 0.001，q25 ≥ 0，negative starts ≤ 1）
+- 通过 → 扩展至 n=5（seeds 41–45）
+
+**n=5 gate：**
+- ≥ 4/5 seeds 通过风险门控
+- 通过 → 扩展至 n=15
+
+**n=15 gate（主 claim 门槛）：**
+- ≥ 12/15 seeds 通过风险门控
+- 通过 → 满足 Paper 2 主 claim
+
+**失败处理：**
+- 若 seeds 41/42/44 smoke gate < 2/3 → 进入 Branch C（声明降级）
+- 若 n=5 gate < 4/5 → 进入 Branch C
+- 若 n=15 gate < 12/15 → 进入 Branch C
+
+---
+
+## 三、Branch H 的诊断前置步骤（零成本）
+
+在实施 Branch H 之前，建议先执行以下两个零成本诊断，以确认 Branch H 的方向性假设。
+
+### 3.1 Proxy-MPC Negative-Start 窗口分析
+
+**目的：** 确认 proxy-MPC 的 negative-start 窗口是否具有可识别的共同特征（如 SOC 低、freshness 差、event 概率低），从而验证 mean-risk model 的输入特征是否足够。
+
+**具体步骤：**
+1. 从 proxy-MPC 的 validation rollout 中，提取所有 negative-start 窗口（margin < 0 的窗口）
+2. 计算这些窗口在 rollout 开始时的 SOC、freshness（fc4/SPC）、learned event probability 均值
+3. 与 positive-start 窗口的同一特征分布进行比较（Mann-Whitney U 检验）
+4. 若 negative-start 窗口在某些特征上显著不同（p < 0.05），则这些特征可以作为 mean-risk model 的有效输入
+
+**成本：** 零新训练，仅需脚本分析（约 30 分钟）。
+
+**决策影响：** 若 negative-start 窗口无可识别特征，则 mean-risk model 的输入特征设计需要重新考虑（可能需要引入更长的历史窗口或更丰富的 transport-aware 特征）。
+
+### 3.2 Teacher-Improvement Window Alignment Audit（来自 Turn 87，仍有效）
+
+**目的：** 利用 `truth_with_learned_event_forecast.csv`，审计 learned-event 概率与教师改善窗口的对齐情况。
+
+**具体步骤：**
+1. 从 v6/event-transport 的已完成 run roots 中读取 `truth_with_learned_event_forecast.csv`
+2. 对每个 final window，计算教师改善窗口（teacher objective < static objective 的时间步）
+3. 比较 learned-event 概率在教师改善窗口 vs 非改善窗口的分布差异（Mann-Whitney U）
+4. 若显著（p < 0.05），则 learned-event 信号是有效的 mean-risk model 输入特征
+
+**成本：** 零新训练，仅需脚本分析（约 30 分钟）。
+
+**决策影响：** 若 learned-event 信号与教师改善窗口显著对齐，则 Branch H 的 forecast features 设计是合理的；否则需要引入额外的 transport-aware 特征（SPC/fc4 互补性指标）。
+
+---
+
+## 四、完整决策树
+
+```
+零成本诊断（约 1 小时）
+  ├── Proxy-MPC negative-start 窗口分析
+  └── Teacher-improvement window alignment audit
+        ↓
+Branch H：Mean-Risk Self-Rollout Planner（约 9–18 小时，seeds 41/42/44）
+  ├── 数据收集：paired full-window self-rollout（阶段 1–2）
+  ├── 模型训练：mean-risk model（阶段 3）
+  └── Deployment：receding-horizon candidate selection（阶段 4）
+        ↓
+Seeds 41/42/44 smoke gate（≥ 2/3）
+  ├── 通过 → n=5 gate（seeds 41–45）
+  │     ├── 通过（≥ 4/5）→ n=15 gate → 主 claim
+  │     └── 失败 → Branch C
+  └── 失败 → Branch C
+        ↓
+Branch C（声明降级）
+  ├── Paper 2 §7.1：riskcenter n=5（4/5，mean +0.011105）
+  ├── Paper 2 §7.4 Limitations：14 种接口系统性失败，Spearman 0.204/0.280
+  └── Paper 2 §8 Future Work：Branch H 方向 + Jiang et al. (2026)
+```
+
+---
+
+## 五、硬停止条件（更新）
+
+**原硬停止条件（Turn 87）：** v6 场景下连续 3 个新 deployable 接口均在 seeds 41/42/44 gate 失败（0/3 或 1/3）。
+
+**更新后的硬停止条件：**
+- 若 Branch H seeds 41/42/44 smoke gate < 2/3，**立即转 Branch C**，不再尝试新接口
+- 若 Branch H 的 mean-risk model 在 train split 的 held-out 起点上 q25 calibration 误差 > 0.05（预测 q25 与实际 q25 相差超过 5 个百分点），则模型不可信，**立即转 Branch C**
+- 若 Branch H 的 candidate rollout 收集阶段发现 proxy-MPC planner 在 train split 上的 mean margin 也为负（说明 planner 本身在 train split 上就不稳定），**立即转 Branch C**
+
+**理由：** Branch H 是对学习目标的根本性改变，不是参数搜索。若 Branch H 在 smoke gate 失败，说明问题不是学习目标，而是 action abstraction 或任务时间尺度本身，此时继续实验的边际收益不足。
+
+---
+
+## 六、Branch C 内容（保持不变，来自 Turn 87）
+
+若 Branch H 失败：
+
+**Paper 2 §7.1 证据：** v1 riskcenter n=5（B=1.20，v4 场景，4/5 wins，conservative margin mean +0.011105，15/16 selected starts win）
+
+**Paper 2 §7.4 Limitations 内容：**
+- Spearman 0.204/0.280：验证窗口对 final 窗口预测力极弱
+- 学生接口无法压缩教师的多传感器时序混合（sequence-mask exact match ≥ 0.996 仍失败）
+- v6 场景下 14 种 deployable 接口均未通过 seeds 41/42/44 gate（除 option-planner seed44 单点 win +0.007593）
+- per-start oracle static fallback 上界（13/13，+0.008638）表明问题可解，但需要更强的因果接口
+- proxy-MPC 是第一条在多数 seed 上获得正 mean validation margin 的纯因果多步 planner，但 tail risk 未解决
+
+**Paper 2 §8 Future Work：**
+- Branch H 方向（mean-risk self-rollout planner）
+- 引用 Jiang et al. (2026) 解耦安全监督框架
+- 引用 Ogbodo et al. (2025) 分布式 RL 传感器调度框架（CVaR 度量）
+
+---
+
+## 七、对 Paper 1 的影响（无）
+
+v1 的所有路径均不影响 Paper 1 的修订进度。Paper 1 的核心结果（固定预算 B=1.70 下 PD-PPO 的条件性优势）已锁定，与 v1 的 B=1.20/B=1.36 能量账户实验完全独立。
+
+Paper 1 修订执行顺序（来自 Turn 84，保持不变）：
+1. 应用 Turn 84 补丁 D-1/D-5（英式拼写 + "generated truth sequence"全局替换）
+2. 应用其余 Turn 84 补丁（A、B、C、D 类）
+3. Path A 错误修复（Turn 75）
+4. 叙事重建（Turn 73）+ 新 split-protocol 结果整合
+5. 长度削减（Turn 74）
+
+---
+
+## 八、参考文献
+
+- [Chemingui et al., 2025] Yassine Chemingui, Aryan Deshwal, Honghao Wei, Alan Fern, Jana Doppa. *Constraint-Adaptive Policy Switching for Offline Safe Reinforcement Learning*. AAAI 2025. [https://arxiv.org/abs/2412.18946](https://arxiv.org/abs/2412.18946)
+
+- [Lin et al., 2023] Qian Lin, Bo Tang, Zifan Wu, Chao Yu, Shangqin Mao, Qianlong Xie, Xingxing Wang, Dong Wang. *Safe Offline Reinforcement Learning with Real-Time Budget Constraints*. ICML 2023. [https://proceedings.mlr.press/v202/lin23h.html](https://proceedings.mlr.press/v202/lin23h.html)
+
+- [Yu et al., 2025] Jingxin Yu, Lushun Ma, Jinpeng Zhao, Jianchao Ci, M. A. Munnaf, E. V. Henten, Peter W. G. Groot Koerkamp, Shuyi Peng, Xiaoming Wei, Congcong Sun. *A Teacher-Student MPC-PPO Coupled Reinforcement Learning Framework for Winter Temperature Control of Solar Greenhouses in Northern China*. arXiv:2504.20815, 2025. [https://arxiv.org/abs/2504.20815](https://arxiv.org/abs/2504.20815)
+
+- [Jiang et al., 2026] Jiang et al. *Decoupled safety supervision empowering efficient and safe energy management for fuel cell vehicles*. npj Sustainable Mobility and Transport, 2026. [https://www.nature.com/articles/s44333-026-00087-3](https://www.nature.com/articles/s44333-026-00087-3)
+
+- [Kongarana et al., 2026] Srinivasa Rao Kongarana, A. Akepogu, Palagiri Radhika Raju. *Budget-Aware Feature Selection for Reinforcement Learning*. OpenReview, 2026. [https://openreview.net/forum?id=rYhK13RkA5](https://openreview.net/forum?id=rYhK13RkA5)
+
+- [Fernández-Bes et al., 2015] Jesus Fernandez-Bes, Jesús Cid-Sueiro, A. Marques. *An MDP Model for Censoring in Harvesting Sensors: Optimal and Approximated Solutions*. arXiv:2502.00940, 2015. [https://arxiv.org/abs/2502.00940](https://arxiv.org/abs/2502.00940)
+
+- [Ogbodo et al., 2025] C. O. Ogbodo, Timothy J. Rogers, M. Borgo, David James Wagg. *Adaptive Sensor Steering Strategy Using Deep Reinforcement Learning for Dynamic Data Acquisition in Digital Twins*. arXiv:2504.10248, 2025. [https://arxiv.org/abs/2504.10248](https://arxiv.org/abs/2504.10248)
+
+- [Nixon Raj, 2025] Gabriel Nixon Raj. *Adaptive and Regime-Aware RL for Portfolio Optimization*. arXiv:2509.14385, 2025. [https://arxiv.org/abs/2509.14385](https://arxiv.org/abs/2509.14385)

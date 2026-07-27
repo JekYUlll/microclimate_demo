@@ -18,6 +18,7 @@ class MpcTeacherConfig:
     planning_horizon: int = 6
     beam_width: int = 8
     max_branch: int = 16
+    oracle_loss_weight: float = 1.0
     event_weight_alpha: float = 1.0
     lambda_warmup_abort: float = 0.16
     lambda_switch: float = 0.002
@@ -251,7 +252,7 @@ def _step_cost_from_info(
         else 0.0
     )
     return float(
-        event_weight * float(loss)
+        float(cfg.oracle_loss_weight) * event_weight * float(loss)
         + float(cfg.lambda_switch) * switch_rate
         + float(cfg.lambda_warmup_abort) * aborts
         + float(cfg.lambda_energy_deficit) * deficit

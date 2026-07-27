@@ -32,10 +32,10 @@ os.makedirs("plots", exist_ok=True)
 # ============================================
 print("=== 读取数据 ===")
 db_config = {
-    "host": "124.220.77.63",
-    "user": "horeb",
-    "password": "ZZYzzy4771430///",
-    "database": "antarctic_data",
+    "host": os.environ["ANTARCTIC_DB_HOST"],
+    "user": os.environ.get("ANTARCTIC_DB_USER", "horeb"),
+    "password": os.environ["ANTARCTIC_DB_PASSWORD"],
+    "database": os.environ.get("ANTARCTIC_DB_NAME", "antarctic_data"),
     "charset": "utf8mb4",
 }
 

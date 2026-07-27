@@ -1,0 +1,137 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{natbib}
+\usepackage{hyperref}
+
+\title{No-Warmup Prediction-Driven Sensor Scheduling for Antarctic Blowing-Snow Monitoring}
+\author{Yongzhe Li \and Zhuyu Zhang}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Power-constrained automatic weather stations must decide which sensors to
+operate when observing Antarctic blowing-snow processes. This draft studies a
+no-warmup scheduling regime in which the strongest static allocations are less
+dominant than in warm-up-constrained settings. We evaluate a prediction-driven
+policy-gradient scheduler against validation-selected static allocations,
+dynamic heuristics, and operationally constrained heuristic baselines. Current
+evidence supports a narrow claim: removing warm-up costs can expose settings in
+which learned scheduling improves over selected static allocations. Evidence
+for broad dominance over dynamic heuristics remains incomplete and is treated
+as an explicit claim gate rather than an assumed result.
+\end{abstract}
+
+\section{Introduction}
+
+Antarctic blowing-snow monitoring requires multiple sensors with different
+power costs and information roles. A central question is whether adaptive
+scheduling improves future prediction quality when the station cannot power all
+sensors simultaneously.
+
+This manuscript focuses on the no-warmup regime. The goal is not to reuse the
+existing warm-up paper narrative, but to test whether removing warm-up costs
+breaks the compact-static shortcut and creates a reproducible advantage for a
+prediction-driven scheduler.
+
+\paragraph{Current claim boundary.}
+The current evidence supports static-baseline advantage in many no-warmup
+runs. It does not yet support a general claim of dominance over all dynamic
+heuristics. The final manuscript will freeze claims only after the remaining
+server-side runs are aggregated.
+
+\section{System and Problem Formulation}
+
+We model an automatic weather station with a set of sensors
+$\mathcal{S}=\{1,\ldots,N\}$. At each time step the scheduler selects a subset
+$a_t \subseteq \mathcal{S}$ subject to an instantaneous power budget. The
+objective is future prediction quality over microclimate and blowing-snow
+targets, not instantaneous reconstruction alone.
+
+\section{No-Warmup Scheduling Regime}
+
+The no-warmup setting removes startup warm-up penalties from the primary
+evaluation. This makes the setting distinct from warm-up-constrained deployment
+studies. It is useful as a controlled regime for testing whether static
+allocations remain dominant when temporal adaptation is less penalized.
+
+\section{Scheduler}
+
+The learned scheduler is a prediction-driven PPO policy evaluated through the
+existing PD-PPO experiment backend. The policy is compared against:
+
+\begin{itemize}
+  \item validation-selected static allocation;
+  \item feasible static projected allocation;
+  \item round-robin, age-of-information, and random dynamic heuristics;
+  \item duty-constrained versions of the heuristic baselines.
+\end{itemize}
+
+\section{Experimental Protocol}
+
+All training and evaluation runs are executed on the GPU server. Local scripts
+only aggregate CSV/JSON outputs and generate manuscript assets.
+
+\subsection{Evidence Gates}
+
+We separate four gates:
+
+\begin{enumerate}
+  \item advantage over selected/static allocation;
+  \item comparison to unconstrained dynamic heuristics;
+  \item comparison to operationally constrained heuristics;
+  \item dynamic-duty validity.
+\end{enumerate}
+
+\section{Results}
+
+\subsection{Base No-Warmup Grid}
+
+The partial base grid shows a strong selected/static advantage signal. Current
+aggregates indicate B=1.65 wins selected/static in 9/10 seeds and B=1.70 wins
+selected/static in 5/5 completed seeds. However, the same runs often lose to
+the best fair dynamic heuristic and frequently fail the dynamic-duty target.
+
+\subsection{Hard-Duty Reduced Probe}
+
+Hard-duty constraints fix the behavioral collapse in the completed reduced
+probe: seeds 41 and 42 both avoid always-on and always-off sensors. Performance
+is mixed: seed41 beats selected/static but loses to round-robin and the best
+constrained baseline; seed42 loses to selected/static and round-robin while
+beating the best constrained baseline.
+
+\subsection{Claim-Gate Summary}
+
+This section will be generated from
+\texttt{results/tables/claim\_gate\_summary.md} after the remaining runs are
+synced and aggregated.
+
+\section{Discussion}
+
+The no-warmup regime weakens the strongest static shortcut, but the current
+learned scheduler does not yet show robust dominance over dynamic heuristics.
+This distinction is central to the final paper framing.
+
+\section{Limitations}
+
+The results are simulation/protocol evidence, not field deployment validation.
+The no-warmup regime is a controlled scenario and should not be conflated with
+warm-up-constrained physical deployment.
+
+\section{Conclusion}
+
+No-warmup scheduling provides a useful regime for studying when adaptive
+prediction-driven scheduling can outperform selected static allocations. The
+remaining experimental work determines whether the final paper can claim
+operational heuristic advantage or must remain a narrower static-shortcut-break
+study.
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

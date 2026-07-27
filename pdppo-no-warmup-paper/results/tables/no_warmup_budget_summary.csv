@@ -1,0 +1,6 @@
+source,budget,n,win_validation_static,win_feasible_static,win_best_original_fair,win_best_constrained,mean_custom_ppo_loss,mean_mid_duty,mean_always_on,mean_always_off,mean_switches_per_step
+base_no_warmup,1.65,10,9/10,9/10,0/10,,0.132243,4.000000,0.875000,2.875000,0.175235
+base_no_warmup,1.7,10,10/10,10/10,2/10,,0.130326,3.800000,1.100000,3.100000,0.136953
+base_no_warmup,1.75,7,6/7,6/7,2/7,,0.134270,3.714286,0.857143,2.857143,0.140136
+hard_duty_envdwell12_reduced,1.7,3,2/3,2/3,2/3,3/3,0.141070,8.000000,0.000000,0.000000,0.026873
+hard_duty_reduced,1.7,3,2/3,2/3,0/3,1/3,0.134442,8.000000,0.000000,0.000000,0.312402

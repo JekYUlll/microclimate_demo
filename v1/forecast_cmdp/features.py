@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 import numpy as np
@@ -20,6 +20,11 @@ class ForecastContextConfig:
     wind_scale_ms: float = 1.5
     truth_future: bool = False
     learned_event_probability_columns: tuple[str, ...] = ()
+    continuous_columns: tuple[str, ...] = ()
+    continuous_scales: tuple[float, ...] = ()
+    continuous_truth_future: bool = False
+    learned_continuous_prefix: str = "learned_cont"
+    continuous_current_source: str = "truth"
 
 
 @dataclass(frozen=True)
@@ -27,6 +32,7 @@ class EventForecast:
     probabilities: np.ndarray
     time_to_event: float
     confidence: np.ndarray
+    continuous: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.float32))
 
     def as_vector(self) -> np.ndarray:
         return np.concatenate(
@@ -34,6 +40,7 @@ class EventForecast:
                 self.probabilities.astype(np.float32),
                 np.asarray([self.time_to_event], dtype=np.float32),
                 self.confidence.astype(np.float32),
+                self.continuous.astype(np.float32).reshape(-1),
             ],
             axis=0,
         )
@@ -63,16 +70,46 @@ def build_event_forecast(
         probabilities = _causal_event_probabilities(truth, idx, horizon, cfg)
         confidence = np.clip(np.abs(probabilities - 0.5) * 2.0, 0.0, 1.0).astype(np.float32)
     time_to_event = _normalized_time_to_event(probabilities)
+    continuous = _continuous_context_features(truth, idx, horizon, cfg)
     return EventForecast(
         probabilities=probabilities.astype(np.float32),
         time_to_event=float(time_to_event),
         confidence=confidence.astype(np.float32),
+        continuous=continuous.astype(np.float32),
     )
 
 
 def append_event_forecast(state: np.ndarray, forecast: EventForecast) -> np.ndarray:
     base = np.asarray(state, dtype=np.float32).reshape(-1)
     return np.concatenate([base, forecast.as_vector()], axis=0).astype(np.float32)
+
+
+def event_forecast_feature_names(
+    *,
+    horizon: int,
+    prefix: str = "event_forecast",
+    continuous_columns: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    horizon = max(1, int(horizon))
+    names = (
+        [f"{prefix}_p_h{idx + 1}" for idx in range(horizon)]
+        + [f"{prefix}_time_to_event"]
+        + [f"{prefix}_confidence_h{idx + 1}" for idx in range(horizon)]
+    )
+    for column in tuple(str(x) for x in continuous_columns):
+        safe = column.replace(" ", "_")
+        names.extend(
+            [
+                f"{prefix}_{safe}_current",
+                f"{prefix}_{safe}_future_mean",
+                f"{prefix}_{safe}_future_max",
+                f"{prefix}_{safe}_future_min",
+                f"{prefix}_{safe}_future_std",
+                f"{prefix}_{safe}_future_last",
+                f"{prefix}_{safe}_future_delta",
+            ]
+        )
+    return tuple(names)
 
 
 def sensor_timing_features(
@@ -127,6 +164,98 @@ def _learned_event_probabilities(
     if len(values) < int(horizon):
         values.extend([0.0] * (int(horizon) - len(values)))
     return np.clip(np.asarray(values, dtype=np.float32), 0.0, 1.0)
+
+
+def _continuous_context_features(
+    truth: pd.DataFrame,
+    current_idx: int,
+    horizon: int,
+    cfg: ForecastContextConfig,
+) -> np.ndarray:
+    columns = tuple(str(x) for x in cfg.continuous_columns)
+    if not columns:
+        return np.zeros(0, dtype=np.float32)
+    scales = tuple(float(x) for x in cfg.continuous_scales)
+    values: list[float] = []
+    for column_idx, column in enumerate(columns):
+        scale = scales[column_idx] if column_idx < len(scales) else 1.0
+        scale = max(abs(float(scale)), 1.0e-6)
+        if column not in truth.columns or len(truth) == 0:
+            values.extend([0.0] * 7)
+            continue
+        series = truth[column].astype(float).to_numpy()
+        idx = int(np.clip(int(current_idx), 0, max(len(series) - 1, 0)))
+        learned_future = _learned_continuous_values(
+            truth,
+            current_idx=idx,
+            horizon=int(horizon),
+            source_column=column,
+            prefix=str(cfg.learned_continuous_prefix),
+        )
+        current_source = str(cfg.continuous_current_source)
+        if current_source == "learned_h1":
+            if learned_future is None or learned_future.size == 0:
+                raise ValueError(
+                    f"continuous_current_source=learned_h1 requires learned forecasts for {column}"
+                )
+            current = float(learned_future[0])
+        elif current_source == "truth":
+            current = float(series[idx])
+        else:
+            raise ValueError(f"Unsupported continuous_current_source: {current_source}")
+        if not np.isfinite(current):
+            current = 0.0
+        if bool(cfg.continuous_truth_future):
+            start = idx + 1
+            end = start + int(horizon)
+            future = series[start:end].astype(float)
+            if future.size < int(horizon):
+                pad_value = float(future[-1]) if future.size else current
+                future = np.pad(future, (0, int(horizon) - future.size), constant_values=pad_value)
+            future = np.where(np.isfinite(future), future, current)
+        elif learned_future is not None:
+            future = np.where(np.isfinite(learned_future), learned_future, current)
+        else:
+            # Causal fallback for deployable paths until a learned continuous
+            # forecaster is added: persistence from the current measured state.
+            future = np.full(int(horizon), current, dtype=float)
+        stats = [
+            current,
+            float(np.mean(future)),
+            float(np.max(future)),
+            float(np.min(future)),
+            float(np.std(future)),
+            float(future[-1]) if future.size else current,
+            (float(future[-1]) if future.size else current) - current,
+        ]
+        values.extend(float(x) / scale for x in stats)
+    return np.asarray(values, dtype=np.float32)
+
+
+def learned_continuous_column_name(prefix: str, source_column: str, horizon_idx: int) -> str:
+    safe = str(source_column).replace(" ", "_")
+    return f"{str(prefix)}_{safe}_h{int(horizon_idx)}"
+
+
+def _learned_continuous_values(
+    truth: pd.DataFrame,
+    *,
+    current_idx: int,
+    horizon: int,
+    source_column: str,
+    prefix: str,
+) -> np.ndarray | None:
+    columns = [
+        learned_continuous_column_name(prefix, str(source_column), horizon_idx + 1)
+        for horizon_idx in range(int(horizon))
+    ]
+    if not all(column in truth.columns for column in columns):
+        return None
+    if len(truth) == 0:
+        return np.zeros(int(horizon), dtype=float)
+    row = truth.iloc[int(current_idx)]
+    values = [float(row[column]) for column in columns]
+    return np.asarray(values, dtype=float)
 
 
 def _causal_event_probabilities(

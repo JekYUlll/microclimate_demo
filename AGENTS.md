@@ -1,3 +1,30 @@
+## Usage
+
+- 本地：
+  uv、conda和pip可用，已可用的虚拟环境：darts（conda）
+  本地没有独立显卡，仅能做简单CPU验证与图表绘制，正式实验应使用服务器。
+  本地 sudo 可用；不要在仓库中记录凭据。
+  执行重大root命令时必须询问
+
+- 服务器（运行任务时应调用skill）：
+  远程 GPU 服务器只有一个有效入口：SSH alias `remote-gpu`。
+  不要使用历史内网 IP、旧隧道/客户端路径或任何硬编码主机地址。
+  GPU服务器，规格4090 48GB*6，224线程CPU。
+  用户：`zhangzhuyu`
+  项目位置：`~/_code/microclimate_demo`
+  已可用的虚拟环境：darts（conda），同时uv和pip可用。
+  如是长时间耗时任务，使用tmux运行。
+
+- 传感器
+  真实传感器的串口读取以及
+
+- 论文撰写：
+    在`rl_sensor_scheduling_framework/paper`路径下，以`main.tex`为主，`raw.tex`为中文直译版本。修改论文内容时，应修改前者。
+
+以下为项目描述，部分内容可能过时，不需要完整阅读。
+
+---
+
 ## Project Scripts Overview
 
 This file summarizes runnable scripts under `scripts/` (and `scripts/baselines/`) plus the independent scheduling suite in `experiments_scheduling_suite/`.
