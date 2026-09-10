@@ -1,3 +1,80 @@
+## 2026-09-10 - V616 empirical cold availability geometry closeout
+
+- Corrected the sensor availability floor to `0.0`, preserving the measured
+  low-temperature availability relation instead of clipping it to `0.2`.
+- Reused the V614 empirical cold-availability truth and physical 55 W dynamic
+  resource trace, with 32 arbitrary subset candidates and four frozen seeds.
+- Verified four heater states and occasional state-wise winner changes, but
+  the actual time-weighted operating opportunity gaps were only
+  `0.001953/0.001002/0.001046/0.000000` for seeds `7401--7404`.
+- `candidate_005` remained the best fixed subset in all four seeds. The route
+  is closed before online transfer and PPO; equal-state reweighting is kept
+  as a diagnostic and is not evidence for deployment.
+
+## 2026-09-10 - V617 full-test geometry audit launched
+
+- Reused the frozen V616 assets without changing the truth, physical resource
+  trace, budgets, candidate masks, or oracle configuration.
+- Launched a deterministic 27-window grid across the complete final partition
+  `[76500, 90000)` for all four seeds to audit sparse-window support.
+- This is a policy-free geometry audit; online transfer and PPO remain blocked
+  pending aggregation.
+
+## 2026-09-10 - V617 full-test geometry closeout
+
+- The fixed 27-window grid over the complete final partition completed for all
+  four seeds.
+- Operating gaps were `0.002867/0/0/0.001742`, with mean `0.001152`; only two
+  seeds were positive and none approached the `0.01` gate.
+- `candidate_005` remained the best static subset in all seeds. The sparse
+  window hypothesis is rejected and the empirical-cold heater route is closed
+  before online transfer/PPO.
+- The next experiment is a predeclared budget phase screen using the same
+  entity-mapped costs, full 32-subset geometry, and no post-hoc point choice.
+
+## 2026-09-10 - V618 budget phase geometry launched
+
+- Started a predeclared six-point interface-budget screen at
+  `1.25/1.50/1.75/1.90/2.05/2.15`, with proportional startup budgets and
+  unchanged physical 55 W dynamic-resource budget.
+- Reused V616 frozen assets, 32 masks, four seeds, and eight fixed starts;
+  this is a policy-free feasibility/forecast-geometry diagnostic.
+- No budget will be promoted without an all-seed geometry pass.
+
+## 2026-09-10 - Flexible-subset direction correction
+
+- Verified that the current SOC mechanism is generic infrastructure rather than
+  an evidenced entity battery model. The available energy audit is based on a
+  fixed 600 W external heater and truncated 25-hour sampled truth.
+- Closed V613 quality-coupled geometry as non-confirmatory: operating gaps were
+  `0.002415`, `0.014562`, `0.031601`, and `0.033118` across seeds 7181--7184.
+- Kept PPO blocked and redirected the active goal to a persistent,
+  deployable-nowcast operating-state chain with the existing arbitrary-subset
+  action surface.
+
+## 2026-09-10 - V611 group-balanced geometry closeout
+
+- Group-balanced operating gaps for seeds `7177--7180` were `0`, `0`, `0`,
+  and `0.000124`; every seed retained seven 1% near-optimal candidates.
+- No online transfer or PPO was run. A secondary noisy-proxy partition also
+  produced only `-0.000250` to `+0.000798` gaps. The next scene must strengthen
+  the mode-specific specialist quality relation.
+
+### 2026-09-10 V612 exclusive-quality truth launch
+
+- Added `scripts/178_build_exclusive_quality_truth.py`, preserving target and
+  event-label columns while applying a delayed online-mode quality factor to
+  specialist channels.
+- Generated four 90,000-step truth files and launched frozen asset refitting
+  in remote tmux `v612_assets`; geometry remains the next gate.
+
+### 2026-09-10 V612 geometry closeout
+
+- Operating gaps for seeds `7177--7180` were `0.000001`, `0`, `0`, and
+  `0.000020`; every seed retained seven 1% near-optimal candidates.
+- The route is closed before online transfer and PPO. Further quality-floor,
+  target-weight, or budget changes would be post-hoc scene fitting.
+
 ## 2026-06-07 - PD-PPO static-break recalibration
 
 ### Scope
@@ -7265,3 +7342,476 @@
   prespecified transport-rich evaluation windows.
 - Evidence:
   `rl_sensor_scheduling_framework/reports/aggregate/pdppo_full_final_partition_24seed_20260718/`.
+
+### 2026-09-09 Physics-First Flexible-Subset Rebase
+- Re-read `rl_sensor_scheduling_framework/docs/09-02-01.md` and reaffirmed the
+  admissible order: documented physical resource behaviour, dynamic effective
+  resource geometry, complete-subset forecast geometry, chronological online
+  transfer, and only then PD-PPO training.
+- Corrected the active experiment plan from an obsolete manuscript/ESWA status
+  to the current arbitrary-subset physics route. Paper files were not edited.
+- V613 truth-matched quality-asset construction is running on `remote-gpu` in
+  tmux session `pdppo_v613_quality_assets_all`; seeds 7181 and 7182 have
+  completed and seed 7183 is in progress. No new learner result exists yet.
+- The pending audit will use a read-only join of the predeclared resource trace
+  on `time_idx`; the merged audit view will not be used to refit the forecaster.
+
+### 2026-09-09 V613 Quality-Route Gate Closed
+- Rebuilt truth-matched frozen quality assets for seeds 7181--7184 and audited
+  all 16 actually feasible optional subsets under `2.15` steady and `2.60`
+  startup budgets.
+- Operating-state opportunity gaps were `0.002415`, `0.014562`, `0.031601`,
+  and `0.033118`; the epsilon `0.01`/`0.05` near-optimal intersection was
+  empty for every seed. This establishes some complete-subset geometry, not
+  deployable adaptive value by itself.
+- Chronological online transfer top-1 accuracy was `24.6%`, `44.2%`, `16.1%`,
+  and `26.0%`. The online probe's mean improvement over the selected static
+  action was `-0.020047`, with only seed 7181 positive (`+0.000812`).
+- The route therefore fails the online-transfer gate and is closed before
+  PD-PPO training. Full audit: `reports/aggregate/v613_quality_route_gate_20260909/`.
+
+### 2026-09-09 Stage B V526 Started
+- Closed V613 after its online-transfer failure and opened Stage B using the
+  previously truth-screened V521 independent target-innovation relation.
+- Generated entity heater traces for seeds 7177--7180 using the fixed V600
+  manifest. GMX occupancy was `0.6925--0.6933` and Parsivel occupancy
+  `0.8483--0.8511`; no target or event label was changed.
+- Started remote frozen-asset construction in tmux `pdppo_v526_assets` with
+  dynamic effective resource columns, B=`2.15`, startup=`2.60`, and six-step
+  dwell. PPO remains blocked pending geometry and online-transfer gates.
+- The first launch stopped before metrics because the mandatory CR1000Xe
+  backbone quality metadata column was absent from V521 truth. The existing
+  immutable adapter `128_prepare_entity_effective_truth.py` was added to the
+  asset script; it changes no target or event column, and the corrected build
+  was relaunched.
+
+### 2026-09-09 V527 Observable-Target Truth Gate
+- V526's four-seed online probe had mean static-relative improvement `-0.00123`,
+  so the hidden AR(1) target amplitude was rejected as insufficiently
+  observable.
+- V527-r1 tested direct noisy-nowcast drivers and failed the six-step
+  transport/particle correlation gate (`0.23--0.42`). V527-r2 added one fixed
+  causal low-pass with `rho=0.95`, aligned with the six-step dwell scale.
+- V527-r2 passed truth-only checks across all four seeds: future six-step
+  driver-target correlation was transport `0.891--0.899`, particle
+  `0.626--0.693`, and thermal `0.989--0.990`; mode support, persistence, and
+  physical bounds also passed.
+- V528 will build frozen assets on V527-r2 plus the entity heater trace. No PPO
+  training is authorized until its complete-subset geometry and chronological
+  transfer both pass.
+
+### 2026-09-09 V528 Asset Build Started
+- Synchronized the V527-r2 truth-only route to `remote-gpu` and started
+  truth-matched frozen asset construction with the fixed entity heater traces,
+  B=`2.15`, startup=`2.60`, and six-step dwell.
+- Seed 7177 is currently in asset preparation. No policy checkpoint or learner
+  result exists; geometry and chronological transfer remain mandatory gates.
+
+### 2026-09-10 V586 Budget Screen Reclassified
+- Audited the completed B=`1.85`/`2.35` screen and found that the geometry
+  runner coupled the normalized action-cost budget to the dynamic effective-
+  resource budget, despite the sensor YAML and heater trace using different
+  declared scales.
+- The dynamic guard also used `fixed_power_w=0.0`, omitting the mandatory
+  CR1000Xe backbone that remained present in the static projector.
+- These outputs remain diagnostic only and are not accepted as final geometry
+  evidence. No PPO result was produced from them.
+
+### 2026-09-10 V587 Consistent-Resource Geometry
+- Added independent geometry-audit overrides for normalized action-cost budget,
+  dynamic effective-resource budget, and fixed dynamic load.
+- Reused the locked V586 truth, frozen evaluators, and eight starts. The remote
+  audit uses static projector budgets `1000/1000`, dynamic effective-resource
+  budget `2.15`, and backbone fixed load `0.4104`.
+- V587 is a corrected geometry audit only. Online transfer and PPO remain
+  blocked until all four seeds pass the predeclared operating geometry gate.
+
+### 2026-09-10 V587 Geometry Result and V588 Launch
+- Corrected V587 B=`2.15` operating gaps for seeds `7401--7404` were
+  `0.011506`, `0.016133`, `0.006384`, and `0.008015`. The 1% near-optimal
+  static intersection was empty for all seeds, but the all-seed materiality
+  gate failed; no online transfer or PPO was started.
+- Launched V588 to rerun the predeclared B=`1.85` and B=`2.35` screen under
+  the corrected independent-budget semantics and with backbone fixed load
+  `0.4104`. Eight jobs are running remotely against the locked V586 assets.
+
+### 2026-09-10 V588 Result and V589 Diagnostic
+- Corrected B=`1.85` operating gaps were
+  `0.011506, 0.016133, 0.006384, 0.008015`; corrected B=`2.35` gaps were
+  `0.010751, 0.015123, 0.005973, 0.007792` for seeds `7401--7404`.
+- Both budget points kept the 1% near-optimal static intersection empty but
+  failed the all-seed materiality gate. A resource-only phase screen found
+  that B=`3.0` is the first tested point with nonzero support for all 32
+  masks across all seeds.
+- A bounded B=`3.0` geometry diagnostic is the next authorized check; it is
+  exploratory and cannot become final evidence without a new frozen budget
+  decision.
+
+### 2026-09-10 V589 Breakpoint Geometry Launch
+- Started four parallel B=`3.0` geometry audits using the corrected independent
+  budget semantics, locked V586 truth/evaluators/starts, and backbone fixed
+  load `0.4104`.
+- B=`3.0` is the first tested resource breakpoint with nonzero support for all
+  32 masks in every seed. The run is exploratory; no PPO training is allowed
+  until a new frozen budget decision and confirmation protocol are defined.
+
+### 2026-09-10 V590 Window-Count Audit Fix
+- The first pooled-controller geometry run still used `--max-rollouts 4`,
+  which truncated the eight explicit starts to four. Its outputs are not
+  accepted as eight-window evidence.
+- The runner now uses `--max-rollouts 8`; V590 was relaunched with the same
+  pooled assets, truth, evaluators, and all eight locked starts.
+
+### 2026-09-10 V590 Geometry Gate Passed
+- The valid eight-window V590 B=`3.0` audit passed the operating geometry gate
+  for all seeds. Gaps were `0.062288, 0.056644, 0.046725, 0.045861` for
+  seeds `7401--7404`.
+- The 1% near-optimal static intersection was empty in every seed and all 32
+  candidate masks had support. Online transfer is the next gate; PPO remains
+  blocked.
+
+### 2026-09-10 V591 Online-Transfer Audit Launch
+- Corrected the transfer audit to include the mandatory CR1000Xe fixed load in
+  dynamic cost checks.
+- Started fixed training-prefix geometry replay on eight starts per seed,
+  followed by a heater-state lookup evaluated on the eight locked test starts.
+  The lookup uses no event labels and no PPO; learner training remains blocked.
+
+### 2026-09-10 V590 Pooled-Controller Scene Correction
+- Replaced seed-specific nowcast quantile calibration with a single calibration
+  fitted on the pooled training prefixes of seeds `7401--7404`.
+- Heater states became balanced across seeds: `00` about 20--21k, `01` about
+  12--13k, `10` about 36--37k, and `11` about 19--20k over 90k steps.
+- This changes no truth target, event label, or policy observation. New B=`3.0`
+  frozen assets were prepared with backbone fixed load `0.4104`; geometry is
+  running before any online-transfer or PPO step.
+
+### 2026-09-10 V590 Audit Path Fix
+- The first pooled-controller geometry launch stopped before evaluator loading
+  because relative `oracle_path` values were resolved from the repository root
+  instead of the asset directory.
+- The audit now resolves relative frozen-oracle paths against each `run_dir`.
+  The four-seed V590 geometry run was relaunched with the same assets and
+ protocol; the failed launch is not evidence.
+
+### 2026-09-10 V591--V594 Online-Transfer Gate Closed
+- V591 completed the corrected eight-window training replay and chronological
+  heater-state lookup. Transfer beat test static in only 2/4 seeds:
+  `+0.089314, +0.072977, -0.009094, -0.013433` (loss difference; negative is
+  better).
+- V592 added online nowcast, alert, resource-demand, heater-state, and
+  controller-score features to train-only regressors: `+0.090992, +0.077585,
+  -0.024714, -0.021659`.
+- V593 used same-time mandatory-backbone-relative candidate losses:
+  `+0.087543, +0.068322, -0.026392, -0.020452`.
+- V594 added six-step history means of the same online features:
+  `+0.090630, +0.069478, -0.022080, -0.021018`.
+- All bounded transfer probes failed the all-seed online observability gate.
+  The B=`3.0` scene is retained as a geometry-positive/transfer-negative
+  diagnostic only; PPO was not trained and no adaptive claim is made.
+- Artifacts: `reports/v591_resource_transfer_b3p0_20260910/`,
+  `reports/v592_observable_context_transfer_b3p0_20260910/`,
+  `reports/v593_relative_context_transfer_b3p0_20260910/`, and
+  `reports/v594_history_context_transfer_b3p0_20260910/`.
+
+### 2026-09-10 V595 Pooled-Context Transfer Closure
+- Pooled all four development training partitions for one observable-context
+  regressor while retaining per-seed training-selected static comparators:
+  `+0.085574, +0.077100, -0.026971, -0.017979`.
+- Pooled calibration still improved only 2/4 seeds. The B=`3.0` scene is
+  therefore closed before PPO as geometry-positive but transfer-negative.
+- Artifact: `reports/v595_pooled_context_transfer_b3p0_20260910/`.
+
+### 2026-09-10 V596--V597 Full Online-Observation Transfer Closure
+- V596 replayed the mandatory-backbone candidate over the eight locked train
+  and eight locked test starts for seeds `7401--7404`, saving the exact
+  pre-action PD-PPO observation (`520` dimensions). The simulator's exact
+  event flag was explicitly disabled, so the dump contains no event-label
+  input or target value.
+- V597 fitted train-only candidate-loss regressors on that full observation
+  and evaluated the test partition. Transfer-minus-static losses were
+  `+0.090094, +0.067290, -0.016678, -0.023616` for seeds `7401--7404`.
+- Full observation therefore still improved only 2/4 seeds. The heater scene
+  is closed before PPO: its state-dependent feasible-subset geometry is real,
+  but the downstream candidate ranking is not stable under chronological
+  online transfer. This is a diagnostic negative gate, not an algorithm
+  failure and not evidence for an adaptive claim.
+- Artifacts: `reports/v596_online_observations_b3p0_20260910/`,
+  `reports/v597_full_observation_transfer_b3p0_20260910/`.
+### 2026-09-10 V598 Budget-Phase Geometry Screen Launched
+- A resource-only occupancy audit found 16 supported masks at B=`1.2--1.5`,
+  18 at B=`1.6--1.8`, 24 at B=`2.0--2.15`, 30 at B=`2.35--2.6`, and all 32
+  at B=`3.0`, consistently across the four development seeds.
+- Started a truth/evaluator-only B=`1.4` and B=`1.6` geometry screen using
+  16 fixed starts per seed, static projector budgets `1000/1000`, dynamic
+  backbone load `0.4104`, and no PPO. These budgets test whether a lower
+  feasible-set phase restores condition-specific subset value before any
+  learner decision.
+### 2026-09-10 V598 B=1.4 Geometry Gate Passed
+- The lower-budget B=`1.4` frozen geometry screen passed all four development
+  seeds: operating gaps were `0.079289, 0.045994, 0.024448, 0.051281`; every
+  1% near-optimal operating-condition intersection was empty, and the union of
+  the three event-specialist channels was infeasible.
+- The B=`1.6` sub-batch emitted no valid result and is excluded from evidence.
+
+### 2026-09-10 V599 B=1.4 Online-Observation Dump Launched
+- Started the exact pre-action PD-PPO observation dump for eight training and
+  eight test starts per seed at B=`1.4`, with the exact event flag excluded.
+- PPO remains blocked pending the chronological online-transfer gate.
+### 2026-09-10 V600 B=1.4 Transfer Gate Failed
+- The B=`1.4` full-observation transfer audit used train-only regressors and
+  excluded the exact simulator event flag. Transfer-minus-static losses were
+  `+0.128583, +0.026501, -0.058438, +0.017573` for seeds `7401--7404`; only
+  one seed improved.
+- B=`1.4` therefore passes task-level geometry but fails chronological online
+  transfer. No PPO was trained. The heater route is closed as
+  geometry-positive/observability-negative; the next scene must repair the
+  causal link between observable nowcast context, effective power, and sensing
+  quality.
+### 2026-09-10 V601 Alert-Coupled Resource Scene Launched
+- Started a clean resource-only scene variant in which met-core and laser
+  heater modes follow their corresponding observable alert scores at threshold
+  `0.5`; unchanged channels retain their source trace.
+- Truth targets, event labels, sensor definitions, and frozen forecasters are
+  copied unchanged. The exact event flag is disabled and alert context is
+  enabled for the deployable observation.
+- This is a new geometry/observability screen, not a PPO run; all gates remain
+  required before learner training.
+### 2026-09-10 V602 Alert-Coupled Geometry Launched
+- The new alert-coupled assets preserve truth targets, event labels, sensor
+  definitions, and frozen forecasters while changing only effective-power
+  traces and online alert-context metadata.
+- Started a B=`2.15` geometry audit with 16 fixed starts per seed, independent
+  static projector budgets `1000/1000`, and backbone fixed load `0.4104`.
+- No online transfer or PPO is authorized until the four-seed geometry gate is
+  reviewed.
+### 2026-09-10 V603 Alert-Coupled Online Observation Dump Launched
+- Started eight train and eight test fixed-start replays at B=`2.15` using
+  the alert-coupled assets. The observation contains causal alert context and
+  excludes exact event labels.
+- V604 transfer aggregation is prepared but remains gated on complete V603
+  artifacts; no PPO training has started.
+### 2026-09-10 V604 Alert-Coupled Transfer Gate Failed
+- The alert-coupled resource scene passed geometry but failed full online
+  transfer in all four seeds: transfer-minus-static losses were
+  `+0.046094, +0.153190, +0.057592, +0.127843`.
+- The resource trigger alone is insufficient because sensor-quality traces and
+  the frozen oracle still came from the earlier scene relation. No PPO was
+  trained. The next scene must couple resource load and quality through one
+  alert/icing controller and refit the forecaster before another gate.
+
+### 2026-09-10 V605 Quality/Resource/Oracle Causal Repair Prepared
+- Prepared a clean follow-up asset builder that retains the alert-coupled
+  effective-power trace but rebuilds specialist quality from the same online
+  alert channels.
+- Keeps truth targets and event labels unchanged, excludes the exact event flag,
+  and refits each seed's frozen TCN on the modified oracle partition.
+- This is a prerequisite geometry/transfer gate; no PPO training is authorized.
+
+### 2026-09-10 V606 Asset-Path Smoke Failure Corrected
+- The first V606 geometry launch found a metadata path-joining defect: V605
+  stored repository-relative truth/oracle/resource paths although replay
+  resolves paths relative to each seed bundle.
+- The defect is corrected by storing bundle-local filenames and does not count
+  as a scientific geometry result. The geometry gate will be rerun after the
+  four bundles are repaired.
+- A second replay smoke check exposed a related stale-resource-column mismatch
+  in oracle fitting: the copied truth retained the old resource columns while
+  evaluation merged the alert-coupled trace. The builder now drops stale
+  resource columns and merges the exact copied trace before TCN fitting.
+
+### 2026-09-10 V606 Quality-Coupled Geometry Closed
+- After the asset repairs, seed7401 completed the full 32-subset geometry audit.
+- Operating-condition opportunity gap was only `0.0001358`; the condition gap
+  was `0.0004415`, and eight masks remained in the 1% near-optimal static
+  intersection.
+- The route is closed before the remaining seeds, online transfer, or PPO. It
+  changes resource feasibility but does not create sufficient forecast-value
+  separation.
+
+### 2026-09-10 V607 Low-Budget Quality-Coupled Screen Prepared
+- Added a four-start B=`1.4` geometry screen using only the repaired V605
+  label-free bundle.
+- The screen tests whether the B=`2.15` static specialist bundle is the cause
+  of the failed geometry gate; it is not a PPO or final multi-seed result.
+
+### 2026-09-10 V607 Low-Budget Screen Closed
+- The four-start B=`1.4` screen produced condition gap `0.0010782` and
+  operating gap `0.0026056`; six masks remained in the 1% near-optimal static
+  intersection.
+- Budget reduction alone is insufficient. The next route must change the
+  condition-specific target/observation relation, not continue budget scans or
+  PPO tuning.
+### 2026-09-10 V608 causal specialist truth-only screen
+
+- Added `scripts/172_build_causal_specialist_truth.py`: a predeclared
+  six-step causal relation from online mode proxy to future specialist target
+  increments, with matching specialist-quality coupling.
+- Added `scripts/173_audit_causal_resource_frontier.py` to audit all 32 masks
+  under the V525 entity-heater trace without fitting a policy.
+- Truth-only result on seeds 7177--7180 passed the target-increment relation:
+  event-window Spearman correlations were about 0.84--0.86 for all three
+  specialist families.
+- Resource geometry at `B=2.15` is dynamic (8--20 feasible masks per step),
+  but seed 7177 still has 8 masks feasible over the full trace; no adaptive
+  claim is authorized.
+- Added `scripts/175_prepare_causal_specialist_assets.py`; remote TCN asset
+  refit is running in tmux session `v608_assets`. PPO remains gated off.
+
+### 2026-09-10 V608 first geometry result
+
+- Rebuilt V608 truth with the mandatory backbone quality column after an
+  environment-schema audit; refit assets retain 32 candidate masks per seed.
+- Seed 7177 condition-level forecast gap is `0.048444` with no 1% static
+  intersection, but operating-heater gap is only `0.002181` with seven 1%
+  near-optimal masks. This is partial evidence, not a gate pass.
+- Remaining V608 geometry seeds are running remotely in tmux `v608_geometry2`;
+  online transfer and PPO remain blocked.
+
+### 2026-09-10 V608 geometry closed; V609 launched
+
+- V608 all-seed geometry closed before online transfer: condition gaps were
+  `0.048444`, `0.024835`, `0.000469`, `0.000016`; operating gaps were
+  `0.002181`, `0`, `0.000053`, `0.000089`. All seeds retained the same seven
+  operating 1% near-optimal masks.
+- V609 couples GMX500 and Parsivel documented heater loads to the causal mode;
+  transport activates both, particle activates Parsivel, and the budget is the
+  manifest's `55 W` development effective budget. Resource-only occupancy is
+  24--32 feasible masks with 24 always-feasible masks per seed.
+- V609 frozen asset refit is running remotely in tmux `v609_assets`; PPO is
+  still gated off.
+
+### 2026-09-10 V608 geometry closed; V609 launched
+
+- V608 all-seed geometry closed before online transfer: condition gaps were
+  `0.048444`, `0.024835`, `0.000469`, `0.000016`; operating gaps were
+  `0.002181`, `0`, `0.000053`, `0.000089`. All seeds retained the same seven
+  operating 1% near-optimal masks.
+- V609 couples GMX500 and Parsivel documented heater loads to the causal mode;
+  transport activates both, particle activates Parsivel, and the budget is the
+  manifest's `55 W` development effective budget. Resource-only occupancy is
+  24--32 feasible masks with 24 always-feasible masks per seed.
+- V609 frozen asset refit is running remotely in tmux `v609_assets`; PPO is
+  still gated off.
+
+### 2026-09-10 V608 first geometry result
+
+- Rebuilt V608 truth with the mandatory backbone quality column after an
+  environment-schema audit; refit assets retain 32 candidate masks per seed.
+- Seed 7177 condition-level forecast gap is `0.048444` with no 1% static
+  intersection, but operating-heater gap is only `0.002181` with seven 1%
+  near-optimal masks. This is partial evidence, not a gate pass.
+- Remaining V608 geometry seeds are running remotely in tmux `v608_geometry2`;
+  online transfer and PPO remain blocked.
+### 2026-09-10 V608 causal specialist truth-only screen
+
+- Added `rl_sensor_scheduling_framework/scripts/172_build_causal_specialist_truth.py`: a predeclared six-step causal relation from an online mode proxy to future specialist target increments, with matching specialist-quality coupling.
+- Added `scripts/173_audit_causal_resource_frontier.py` to audit all 32 masks under the V525 entity-heater trace without fitting a policy.
+- Truth-only result on seeds 7177--7180 passed the target-increment relation: event-window Spearman correlations were about 0.84--0.86 for all three specialist families.
+- Resource geometry at `B=2.15` is dynamic (8--20 feasible masks per step), but seed 7177 still has 8 masks feasible over the full trace; no adaptive claim is authorized.
+- Added `scripts/175_prepare_causal_specialist_assets.py`; remote TCN asset refit is running in tmux session `v608_assets`. PPO remains gated off.
+
+### 2026-09-10 V609 geometry closeout
+
+- Completed the remote four-seed frozen 32-subset forecast-geometry audit for
+  the mode-coupled GMX500/Parsivel resource trace at the declared `55 W`
+  development budget.
+- Condition gaps for seeds `7177--7180` were `0.013069`, `0.002938`,
+  `0.004986`, and `0.004636`; operating-heater gaps were `0.0000057`,
+  `0.0000378`, `0`, and `0.0001899`.
+- Each seed retained eight operating-level candidates in the 1% near-optimal
+  intersection. The route is closed before online transfer or PPO because the
+  low-cost subset family remains a static shortcut under the deployable
+  resource partition.
+
+### 2026-09-10 V610 frequency-mode resource screen
+
+- Combined the pre-existing fixed frequency-cost configuration with the V609
+  mode-coupled heater trace. Frequency scaling is fixed within a run and is
+  not a scheduling action.
+- The resource-only audit at `B=2.15` produced 11--16 feasible masks per step,
+  11 always-feasible masks, and a minimum frontier Jaccard of `0.6875` in all
+  four seeds.
+- Launched remote frozen TCN asset rebuilding in tmux `v610_assets`; geometry
+  and PPO remain gated.
+
+### 2026-09-10 V610 frozen assets and geometry launch
+
+- Rebuilt all four V610 frozen assets with 32 candidate masks each under the
+  fixed frequency-mode resource trace.
+- Launched the four-seed, four-start, 256-step downstream geometry audit in
+  remote tmux `v610_geometry`; online transfer and PPO remain blocked.
+
+### 2026-09-10 V610 geometry closeout
+
+- V610 condition gaps for seeds `7177--7180` were `0`, `0.001559`,
+  `0.003910`, and `0.002090`; operating gaps were `0.0000007`, `0`, `0`,
+  and `0.0000198`.
+- Every seed retained seven operating-level candidates in the 1% near-optimal
+  intersection. Resource dynamics passed, but the operating forecast gate did
+  not; online transfer and PPO were not run.
+- The next diagnostic is a predeclared group-balanced target objective to test
+  whether the ordinary nine-target aggregation is dominated by the two
+  particle variables.
+
+### 2026-09-10 V611 group-balanced asset launch
+
+- Added an explicit `group_balanced` objective to the frozen asset builder:
+  particle, flux, and thermal specialist groups have equal total weight while
+  the six backbone target weights remain unchanged.
+- Launched four remote frozen-forecaster rebuilds in tmux `v611_assets` using
+  the unchanged V608 truth and V610 effective-resource trace.
+## 2026-09-10 - V614 empirical cold-availability screen
+
+- Added an entity-traceable Modbus cold-availability configuration driven by
+  deployable nowcast temperature, based on the independent SEUAWS hardware test.
+- Generated four remote 90,000-row truth/resource pairs. Met quality means were
+  `0.6778--0.6792`, low-quality fractions were `0.2254--0.2265`, and all four
+  heater-state combinations occurred in every seed.
+- Corrected a unit mismatch before promotion: physical-watt heater traces now
+  use a separate declared `55 W` manifest instead of the legacy normalized
+  `2.15` budget. Corrected all-optional feasibility was `0.7759--0.7824`.
+- PPO remains gated; subset forecast geometry is the next experiment.
+
+## 2026-09-10 - V615 frozen-asset preparation
+
+- Launched corrected V614 asset preparation with normalized interface budget
+  `2.15` kept separate from the physical dynamic-resource budget `55.0 W`.
+- This is asset-only: fixed forecaster fitting and candidate metadata only;
+  online transfer and PPO remain gated.
+
+## 2026-09-10 - V615 geometry queued
+
+- Queued the corrected four-seed 32-subset operating-geometry audit after
+  frozen assets complete. It uses the same eight held-out starts, normalized
+  interface budget `2.15`, and physical dynamic-resource budget `55 W`.
+
+## 2026-09-10 - V615 geometry closeout
+
+- Corrected the geometry auditor's relative-oracle-path resolution and
+  completed the four-seed audit.
+- Operating gaps for seeds `7401--7404` were `0.004463`, `0.000824`, `0.001400`,
+  and `0`; the `>=0.01` all-seed gate failed.
+- No online transfer or PPO was launched; the physical cold-availability route
+  is closed pending a stronger downstream subset-value design.
+
+## 2026-09-10 - V616 availability-fidelity correction
+
+- Re-ran the empirical cold-availability route with `availability_floor=0.0`,
+  so measured observation quality is not artificially raised to 20%.
+- All truth, physical resource, budget, split, and candidate settings remain
+  unchanged. Frozen assets are running remotely; PPO remains gated.
+
+## 2026-09-10 V618 budget phase geometry closeout
+
+- Completed all 24 predeclared budget--seed geometry audits using the V616
+  frozen assets, physical 55 W trace, 32 candidate masks, and locked starts.
+- Operating gaps by budget were `[0, .031827, 0, 0]` at B=`1.25`, `1.50`, and
+  `1.75`; `[.008346, .001095, 0, 0]` at B=`1.90`; `[.008491, .001113, 0,
+  .001009]` at B=`2.05`; and `[.008473, .001132, 0, .001006]` at B=`2.15`.
+- No budget passed the all-seed `>=.01` operating geometry gate. No online
+  transfer or PPO was launched; the empirical-cold/heater route is closed.
+- Next work returns to the stronger V557 causal specialist-separated scene
+  to audit deployable weather-derived context and online transfer. Future
+  targets, exact event labels, and bandit outputs remain excluded from policy
+  observations.
