@@ -7815,3 +7815,91 @@
   to audit deployable weather-derived context and online transfer. Future
   targets, exact event labels, and bandit outputs remain excluded from policy
   observations.
+### 2026-09-11 - V688 geometry closeout and B1.55 correction
+
+- Closed V688 at `B=1.40`: all four operating gaps failed the materiality
+  gate and retained a non-empty 1% near-optimal static intersection.
+- Verified from the frozen manifests that the laser particle specialist was
+  infeasible because its startup cost was `1.4904`.
+- Started a bounded `B=1.55` refit using unchanged truth, resource, target,
+  observation, split, and geometry settings. Online transfer and PPO remain
+  blocked pending geometry.
+
+### 2026-09-11 - V688 B1.55 geometry closeout
+
+- Completed the four-seed B1.55 geometry audit.
+- Operating gaps were `0`, `0.0114058924`, `0`, and `0.0190156084`;
+  1% static-intersection sizes were `5`, `0`, `1`, and `0`.
+- Closed V688 before online transfer/PPO because the all-seed geometry gate
+  failed. Budget-only tuning is no longer admissible without a new physical
+  mechanism.
+
+### 2026-09-11 - V689 shared-scenario design
+
+- Added a controlled seed-design route using one new independently generated
+  physical weather/resource realization and four policy seeds.
+- Kept the V688 target relation, entity resource controller, arbitrary 32-mask
+  action family, and observable context unchanged.
+- Added reproducible truth and resource launchers; geometry and PPO remain
+  gated on support and feasibility checks.
+
+### 2026-09-11 - V689 truth/resource gate
+
+- Generated independent scenario seed `7190` and shared it across policy seeds
+  `7191--7194`.
+- The final window has support for all three specialist factors and three
+  entity heater/resource states; laser heater duty is approximately `0.636`.
+- Started matched B1.55 asset preparation in remote tmux `v689_assets`.
+# 2026-09-11
+
+- V699 completed a remote, policy-free cumulative-energy screen using the
+  documented 24 V/8640 Wh battery and 600 W PV design. PV-only resource
+  geometry varied across 36.16--36.26% of hourly epochs over four seeds;
+  the separate 400 W wind sensitivity made all 32 subsets feasible and was
+  rejected as the primary scene. PPO remains gated on forecast geometry.
+- Continued arbitrary-subset exploration only through a newly justified
+  cumulative-energy/SOC route based on the local 24 V micro-energy design
+  (8640 Wh battery, 600 W PV, 24 V/400 W wind generator).
+- Kept V642 and V695--V698 closed before online transfer/PPO after their frozen
+  geometry audits; no positive policy claim is promoted from those routes.
+- Blocked forecaster/PPO work until a resource-only 32-subset SOC screen shows
+  state-varying feasible frontiers and downstream value opportunity.
+
+## 2026-09-11 (V699 audit rerun)
+
+- Corrected the cumulative-energy forecast geometry audit to include the
+  candidate steady-power field required by the shared geometry summarizer.
+- Relaunched the unchanged four-seed, 32-mask, SOC-selected-start audit on
+  `remote-gpu`; no PPO training has been started and no scientific result is
+  claimed while the audit is running.
+
+## 2026-09-11 (V699 corrected geometry closeout)
+
+- Fixed trace-backed zero-SOC initialization so an explicit `0 Wh` start is
+  not replaced by the legacy constant-harvest full-capacity default.
+- Re-ran the four-seed, 32-subset cumulative-energy geometry audit. The
+  energy guard produced support ranges of `1536--2048` rows across six resource
+  conditions per seed.
+- Forecast opportunity gaps were `0.007659`, `0.004258`, `0.007456`, and
+  `0.023342`; the all-seed gate was not met, so no online transfer or PPO was
+  launched. Corrected artifacts are under
+  `reports/v699_energy_forecast_geometry_20260911_corrected/`.
+
+## 2026-09-11 (V700 entity heater/SOC closeout)
+
+- Added documented GMX500/Parsivel2 heater power to both dynamic feasibility
+  and SOC consumption accounting.
+- V700 covered seven resource conditions and changed candidate support, but
+  opportunity gaps were `0.002591`, `0.002090`, `0.006981`, and `0.023518`;
+  the all-seed forecast-value gate failed.
+- Closed V700 before online transfer/PPO. Artifacts are under
+  `reports/v700_entity_soc_heater_geometry_20260911/`.
+
+## 2026-09-11 (energy-account and asset consistency)
+
+- Added an opt-in `energy_use_dynamic_resource_cost` path so physical dynamic
+  channel loads can enter SOC consumption without changing historical runs.
+- Added a regression test for explicit zero-SOC trace initialization; the full
+  suite passes with `PYTHONPATH=rl_sensor_scheduling_framework` (`219 passed`).
+- Synchronized prepared-asset `sensor_ids` with the selected entity sensor
+  configuration and fixed the asset-preparation script to do so automatically.
